@@ -1,0 +1,23 @@
+[Unit]
+Description=PAAL-V2 PIPPIN Arbitrage Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/pippin_arb_bot
+ExecStart=/home/ubuntu/pippin_arb_bot/venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+LimitNOFILE=65536
+
+# Environment
+EnvironmentFile=/home/ubuntu/pippin_arb_bot/.env
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,33 @@
+# Python virtualenv
+venv/
+
+# Environment variables
+.env
+.env.*
+
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+build/
+dist/
+
+# Logs
+logs/
+*.log
+
+# Test output
+.pytest_cache/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System
+.DS_Store
+Thumbs.db
