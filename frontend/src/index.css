@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+/* ── Arbitrage Dashboard Theme ── */
+@theme {
+  --color-surface: #0a0a0f;
+  --color-surface-alt: #07070b;
+  --color-card: #111118;
+  --color-card-hover: #16161f;
+  --color-border: #1e1e2a;
+  --color-border-subtle: #151520;
+
+  --color-spread-positive: #22c55e;
+  --color-spread-negative: #ef4444;
+  --color-spread-opportunity: #4ade80;
+  --color-spread-glow: rgba(34, 197, 94, 0.6);
+
+  --color-accent: #6366f1;
+  --color-accent-light: #818cf8;
+
+  --color-status-live: #22c55e;
+  --color-status-stale: #eab308;
+  --color-status-dead: #ef4444;
+
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* ── Base styles ── */
+body {
+  background-color: var(--color-surface);
+  color: #e2e8f0;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2a2a3a;
+}
+
+/* Glow animation for active opportunities */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(34, 197, 94, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(34, 197, 94, 0.6); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}

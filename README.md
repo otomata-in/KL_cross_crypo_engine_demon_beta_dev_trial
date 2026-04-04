@@ -116,7 +116,7 @@ Sample output:
   Live trades   : 0
 
 ──────────────────────────────────────────────────────────
-  MOCK — Overall Performance
+  Arbitrate — Overall Performance
 ──────────────────────────────────────────────────────────
   Total trades    : 143
   Net PnL         : +47.82 USDT

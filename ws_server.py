@@ -1,25 +1,27 @@
 """
-price_gap_monitor.py — Live Cross-Exchange Price Gap Monitor (WebSocket)
-Uses WebSocket streams from Binance and Backpack for real-time orderbook
-updates. Counts and logs all potential arbitrage opportunities to CSV.
-
-Monitors 20 tokens across 8 categories ("The Elite 20").
+ws_server.py — Headless WebSocket Backend for Arbitrage Dashboard
+=================================================================
+Refactored from price_gap_monitor.py. All terminal display code removed.
+Broadcasts LiveState as JSON over WebSocket at 10fps (ws://127.0.0.1:8765).
 
 Usage:
-    python price_gap_monitor.py
-    python price_gap_monitor.py --threshold 0.3   # highlight gaps > 0.3%
+    python ws_server.py
+    python ws_server.py --threshold 0.3
+    python ws_server.py --port 8765
 
 Press Ctrl+C to stop.
 """
 import asyncio
 import csv
+import json
 import sys
 import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
 
-import ccxt.pro as ccxt  # ccxt.pro = WebSocket support
+import ccxt.pro as ccxt
+import websockets
 
 # ── Configuration ────────────────────────────────────────────────
 
@@ -49,26 +51,12 @@ for cat, tokens in CATEGORIES.items():
 BINANCE_PAIRS  = {t: f"{t}/USDT" for t in TOKENS}
 BACKPACK_PAIRS = {t: f"{t}/USDC" for t in TOKENS}
 
-DEFAULT_THRESHOLD = 1.0    # % spread to highlight in green
-DISPLAY_REFRESH   = 0.1    # refresh screen every 100ms (10fps)
+DEFAULT_THRESHOLD = 1.0    # % spread to highlight
+WS_BROADCAST_INTERVAL = 0.1  # 100ms = 10fps
 
 # Opportunity detection: any gross spread > 0% is a potential opportunity
-# Minimum positive spread to count as an opportunity
-OPP_MIN_SPREAD    = 0.0    # log ANY positive spread (even tiny)
+OPP_MIN_SPREAD    = 0.0
 OPP_LOG_FILE      = "logs/opportunities.csv"
-
-# ── ANSI Colors ──────────────────────────────────────────────────
-RESET   = "\033[0m"
-BOLD    = "\033[1m"
-DIM     = "\033[2m"
-RED     = "\033[91m"
-GREEN   = "\033[92m"
-YELLOW  = "\033[93m"
-CYAN    = "\033[96m"
-WHITE   = "\033[97m"
-MAGENTA = "\033[95m"
-BG_GREEN = "\033[42m"
-BG_RED   = "\033[41m"
 
 # CSV columns for opportunity log
 OPP_COLUMNS = [
@@ -89,7 +77,7 @@ OPP_COLUMNS = [
 
 # ── Shared state ─────────────────────────────────────────────────
 class LiveState:
-    """Thread-safe shared state for all WebSocket feeds."""
+    """Shared state for all WebSocket feeds."""
 
     def __init__(self):
         self.binance  = {}     # token -> {bid, ask, bid_depth, ask_depth, updated}
@@ -104,10 +92,13 @@ class LiveState:
         self.started_at = time.monotonic()
 
         # ── Opportunity tracking ─────────────────────────────────
-        self.opp_count     = {t: 0 for t in TOKENS}   # per-token count
-        self.opp_total     = 0                          # grand total
-        self.opp_last      = {}                         # token -> last opp dict
-        self.opp_best      = {}                         # token -> best spread ever
+        self.opp_count     = {t: 0 for t in TOKENS}
+        self.opp_total     = 0
+        self.opp_last      = {}   # token -> last opp dict
+        self.opp_best      = {}   # token -> best spread ever
+
+        # ── Spread tracking (for session highs) ──────────────────
+        self.spread_history = {t: {"max_buy_bin": -999, "max_buy_bp": -999} for t in TOKENS}
 
 
 state = LiveState()
@@ -139,45 +130,7 @@ class OpportunityLogger:
 opp_logger = OpportunityLogger(OPP_LOG_FILE)
 
 
-# ── Display helpers ──────────────────────────────────────────────
-
-def clear_screen():
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.flush()
-
-
-def format_price(price, decimals=4):
-    if price is None:
-        return f"{'N/A':>11}"
-    return f"{price:>{11}.{decimals}f}"
-
-
-def format_spread(spread_pct, threshold):
-    if spread_pct is None:
-        return f"{'N/A':>8}"
-    sign = "+" if spread_pct >= 0 else ""
-    s = f"{sign}{spread_pct:.3f}%"
-    if spread_pct >= threshold:
-        return f"{BG_GREEN}{BOLD}{s:>8}{RESET}"
-    elif spread_pct >= threshold * 0.5:
-        return f"{GREEN}{s:>8}{RESET}"
-    elif spread_pct > 0:
-        return f"{YELLOW}{s:>8}{RESET}"
-    else:
-        return f"{RED}{s:>8}{RESET}"
-
-
-def staleness_indicator(updated: Optional[float]) -> str:
-    if updated is None:
-        return f"{RED}●{RESET}"
-    age = time.monotonic() - updated
-    if age < 2:
-        return f"{GREEN}●{RESET}"
-    elif age < 5:
-        return f"{YELLOW}●{RESET}"
-    else:
-        return f"{RED}●{RESET}"
-
+# ── Orderbook parser ────────────────────────────────────────────
 
 def parse_orderbook(ob: dict) -> dict:
     """Extract best bid/ask and depth from orderbook."""
@@ -279,6 +232,12 @@ async def opportunity_detector():
             spread_buy_bin = ((p_bid_usdt - b_ask) / b_ask) * 100
             spread_buy_bp  = ((b_bid - p_ask_usdt) / p_ask_usdt) * 100
 
+            # Update spread history for session highs
+            if spread_buy_bin > state.spread_history[token]["max_buy_bin"]:
+                state.spread_history[token]["max_buy_bin"] = spread_buy_bin
+            if spread_buy_bp > state.spread_history[token]["max_buy_bp"]:
+                state.spread_history[token]["max_buy_bp"] = spread_buy_bp
+
             # Check each direction
             for spread, direction in [
                 (spread_buy_bin, "BuyBIN→SellBP"),
@@ -307,8 +266,8 @@ async def opportunity_detector():
                 # Store last opportunity info
                 state.opp_last[token] = {
                     "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-                    "spread": spread,
-                    "net": net_spread,
+                    "spread": round(spread, 4),
+                    "net": round(net_spread, 4),
                     "direction": direction,
                 }
 
@@ -332,194 +291,144 @@ async def opportunity_detector():
         await asyncio.sleep(0.05)  # 20 checks/second
 
 
-# ── Display loop ─────────────────────────────────────────────────
+# ── WebSocket broadcast server ───────────────────────────────────
 
-async def display_loop(threshold: float):
-    """Render the live dashboard from shared state."""
-    cycle = 0
-    spread_history = {t: {"max_buy_bin": -999, "max_buy_bp": -999} for t in TOKENS}
+connected_clients: set = set()
 
-    await asyncio.sleep(3)  # let WebSockets warm up
 
-    while True:
-        cycle += 1
-        now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-        uptime = int(time.monotonic() - state.started_at)
-        uptime_str = f"{uptime // 3600}h{(uptime % 3600) // 60:02d}m{uptime % 60:02d}s"
+async def ws_handler(websocket):
+    """Handle a new WebSocket client connection."""
+    connected_clients.add(websocket)
+    remote = websocket.remote_address
+    print(f"[ws_server] Client connected: {remote}  ({len(connected_clients)} total)")
+    try:
+        await websocket.wait_closed()
+    finally:
+        connected_clients.discard(websocket)
+        print(f"[ws_server] Client disconnected: {remote}  ({len(connected_clients)} total)")
 
-        bin_updates = state.update_count["binance"]
-        bp_updates  = state.update_count["backpack"]
-        usdt_usdc   = state.usdt_usdc_rate
 
-        clear_screen()
+def serialize_state(threshold: float) -> dict:
+    """Convert the global LiveState into a JSON-serializable dictionary.
 
-        # Header
-        print(f"{BOLD}{CYAN}{'═' * 140}{RESET}")
-        print(f"{BOLD}{CYAN}  ⚡ LIVE PRICE GAP MONITOR (WebSocket)  │  Binance ↔ Backpack  │  {now}  │  ⏱ {uptime_str}  │  📊 Elite 20{RESET}")
-        print(f"{BOLD}{CYAN}{'═' * 140}{RESET}")
+    This is the single payload shape that the React frontend consumes.
+    Computed spreads are calculated here so the frontend doesn't need
+    to know about USDT/USDC conversion math.
+    """
+    now_mono = time.monotonic()
+    usdt_usdc = state.usdt_usdc_rate
+    uptime = int(now_mono - state.started_at)
 
-        # Status bar
-        bin_connected = sum(1 for s in state.ws_status["binance"].values() if s == "connected")
-        bp_connected  = sum(1 for s in state.ws_status["backpack"].values() if s == "connected")
-        peg_dev = (usdt_usdc - 1.0) * 100
-        peg_color = GREEN if abs(peg_dev) < 0.05 else YELLOW if abs(peg_dev) < 0.1 else RED
+    # Build per-token orderbook + computed spread data
+    token_data = {}
+    for token in TOKENS:
+        bd = state.binance.get(token, {})
+        pd = state.backpack.get(token, {})
 
-        print(f"  {DIM}WS: BIN {GREEN if bin_connected == len(TOKENS) else YELLOW}{bin_connected}/{len(TOKENS)}{RESET}{DIM}"
-              f"  BP {GREEN if bp_connected == len(TOKENS) else YELLOW}{bp_connected}/{len(TOKENS)}{RESET}{DIM}"
-              f"  │  Ticks: BIN={bin_updates:,}  BP={bp_updates:,}"
-              f"  │  USDT/USDC: {peg_color}{usdt_usdc:.6f} ({peg_dev:+.4f}%){RESET}{DIM}"
-              f"  │  Threshold: ≥{threshold}%"
-              f"  │  {GREEN}Opportunities: {state.opp_total}{RESET}")
-        print()
+        b_bid = bd.get("bid")
+        b_ask = bd.get("ask")
+        p_bid = pd.get("bid")
+        p_ask = pd.get("ask")
 
-        # Table header
-        hdr = (
-            f"  {BOLD}{'':>1} {'Token':<7}"
-            f"{'BIN Bid':>11} {'BIN Ask':>11}"
-            f" │ "
-            f"{'BP Bid':>11} {'BP Ask':>11}"
-            f" │ "
-            f"{'BuyBIN→BP':>10} {'BuyBP→BIN':>10}"
-            f" │ "
-            f"{'SessHigh':>9}"
-            f" {'Opps':>5}"
-            f" {'BestOpp':>8}"
-            f" {'LastOpp':>16}"
-            f"{RESET}"
-        )
-        print(hdr)
-        print(f"  {'─' * 136}")
+        # Compute spreads if we have all prices
+        spread_buy_bin = None
+        spread_buy_bp = None
+        if all([b_bid, b_ask, p_bid, p_ask]):
+            p_bid_usdt = p_bid / usdt_usdc
+            p_ask_usdt = p_ask / usdt_usdc
+            spread_buy_bin = round(((p_bid_usdt - b_ask) / b_ask) * 100, 4)
+            spread_buy_bp  = round(((b_bid - p_ask_usdt) / p_ask_usdt) * 100, 4)
 
-        best_token = None
-        best_spread = -999
-        best_direction = ""
+        # Session highs
+        sh = state.spread_history[token]
+        session_high = max(sh["max_buy_bin"], sh["max_buy_bp"])
+        if session_high <= -999:
+            session_high = None
 
-        last_cat = None
-        for token in TOKENS:
-            # Print category separator
-            cat = TOKEN_CATEGORY[token]
-            if cat != last_cat:
-                if last_cat is not None:
-                    print(f"  {DIM}{'·' * 136}{RESET}")
-                last_cat = cat
+        token_data[token] = {
+            "category": TOKEN_CATEGORY[token],
+            "binance": {
+                "bid": b_bid,
+                "ask": b_ask,
+                "bid_depth": round(bd.get("bid_depth", 0), 2),
+                "ask_depth": round(bd.get("ask_depth", 0), 2),
+                "age_ms": int((now_mono - bd["updated"]) * 1000) if bd.get("updated") else None,
+                "status": state.ws_status["binance"].get(token, "disconnected"),
+            },
+            "backpack": {
+                "bid": p_bid,
+                "ask": p_ask,
+                "bid_depth": round(pd.get("bid_depth", 0), 2),
+                "ask_depth": round(pd.get("ask_depth", 0), 2),
+                "age_ms": int((now_mono - pd["updated"]) * 1000) if pd.get("updated") else None,
+                "status": state.ws_status["backpack"].get(token, "disconnected"),
+            },
+            "spread_buy_bin": spread_buy_bin,   # Buy on Binance → Sell on Backpack
+            "spread_buy_bp": spread_buy_bp,     # Buy on Backpack → Sell on Binance
+            "session_high": session_high,
+            "opp_count": state.opp_count.get(token, 0),
+            "opp_best": round(state.opp_best[token], 4) if token in state.opp_best else None,
+            "opp_last": state.opp_last.get(token),
+        }
 
-            bd = state.binance.get(token, {})
-            pd = state.backpack.get(token, {})
+    # Connection summaries
+    bin_connected = sum(1 for s in state.ws_status["binance"].values() if s == "connected")
+    bp_connected  = sum(1 for s in state.ws_status["backpack"].values() if s == "connected")
 
-            b_bid = bd.get("bid")
-            b_ask = bd.get("ask")
-            p_bid = pd.get("bid")
-            p_ask = pd.get("ask")
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": uptime,
+        "threshold": threshold,
 
-            b_dot = staleness_indicator(bd.get("updated"))
-            p_dot = staleness_indicator(pd.get("updated"))
+        # Exchange connectivity
+        "binance_connected": bin_connected,
+        "backpack_connected": bp_connected,
+        "total_tokens": len(TOKENS),
+        "update_count": state.update_count.copy(),
 
-            if b_bid and b_ask and p_bid and p_ask:
-                p_bid_usdt = p_bid / usdt_usdc
-                p_ask_usdt = p_ask / usdt_usdc
-
-                spread_buy_bin = ((p_bid_usdt - b_ask) / b_ask) * 100
-                spread_buy_bp = ((b_bid - p_ask_usdt) / p_ask_usdt) * 100
-
-                if spread_buy_bin > spread_history[token]["max_buy_bin"]:
-                    spread_history[token]["max_buy_bin"] = spread_buy_bin
-                if spread_buy_bp > spread_history[token]["max_buy_bp"]:
-                    spread_history[token]["max_buy_bp"] = spread_buy_bp
-
-                session_high = max(spread_history[token]["max_buy_bin"],
-                                   spread_history[token]["max_buy_bp"])
-
-                max_spread = max(spread_buy_bin, spread_buy_bp)
-                if max_spread > best_spread:
-                    best_spread = max_spread
-                    best_token = token
-                    best_direction = "BuyBIN→BP" if spread_buy_bin >= spread_buy_bp else "BuyBP→BIN"
-            else:
-                spread_buy_bin = None
-                spread_buy_bp = None
-                session_high = 0
-
-            # Decimals based on price
-            sample = b_bid or p_bid or 1
-            dec = 2 if sample > 100 else (4 if sample > 1 else 6)
-
-            session_high_str = f"{session_high:+.3f}%" if session_high > -999 else "N/A"
-            session_color = GREEN if session_high >= threshold else YELLOW if session_high > 0 else DIM
-
-            # Opportunity stats
-            opp_count = state.opp_count.get(token, 0)
-            opp_best  = state.opp_best.get(token, 0)
-            opp_last  = state.opp_last.get(token)
-
-            opp_count_str = f"{GREEN}{opp_count:>5}{RESET}" if opp_count > 0 else f"{DIM}{opp_count:>5}{RESET}"
-            opp_best_str  = f"{GREEN}{opp_best:+.3f}%{RESET}" if opp_best > 0 else f"{DIM}{'--':>8}{RESET}"
-            opp_last_str  = f"{GREEN}{opp_last['time']} {opp_last['spread']:+.2f}%{RESET}" if opp_last else f"{DIM}{'--':>16}{RESET}"
-
-            row = (
-                f"  {b_dot}{p_dot} {BOLD}{WHITE}{token:<7}{RESET}"
-                f"{format_price(b_bid, dec)} {format_price(b_ask, dec)}"
-                f" {DIM}│{RESET} "
-                f"{format_price(p_bid, dec)} {format_price(p_ask, dec)}"
-                f" {DIM}│{RESET} "
-                f"{format_spread(spread_buy_bin, threshold)}"
-                f"  {format_spread(spread_buy_bp, threshold)}"
-                f" {DIM}│{RESET}"
-                f" {session_color}{session_high_str:>9}{RESET}"
-                f" {opp_count_str}"
-                f" {opp_best_str}"
-                f" {opp_last_str}"
-            )
-            print(row)
-
-        print(f"  {'─' * 136}")
-
-        # Best current opportunity
-        if best_token and best_spread > 0:
-            color = GREEN if best_spread >= threshold else YELLOW
-            net = best_spread - 0.20
-            net_color = GREEN if net > 0 else RED
-            print(f"\n  {BOLD}⚡ Best now:{RESET} {color}{BOLD}{best_token}{RESET}"
-                  f" gross {color}{best_spread:+.3f}%{RESET}"
-                  f"  net {net_color}{net:+.3f}%{RESET}"
-                  f"  ({best_direction})")
-        else:
-            print(f"\n  {DIM}No positive spread right now — monitoring...{RESET}")
+        # USDT/USDC peg
+        "usdt_usdc_rate": usdt_usdc,
 
         # Opportunity summary
-        if state.opp_total > 0:
-            opp_per_min = state.opp_total / max(1, (time.monotonic() - state.started_at) / 60)
-            print(f"\n  {BOLD}{GREEN}📊 Opportunities detected: {state.opp_total}{RESET}"
-                  f"  ({opp_per_min:.1f}/min)"
-                  f"  │  Logged to: {CYAN}{OPP_LOG_FILE}{RESET}")
-            # Per-token breakdown
-            parts = []
-            for t in TOKENS:
-                c = state.opp_count.get(t, 0)
-                if c > 0:
-                    parts.append(f"{t}={c}")
-            if parts:
-                print(f"  {DIM}  By token: {', '.join(parts)}{RESET}")
+        "opp_total": state.opp_total,
 
-        # Legend
-        print(f"\n  {DIM}Legend: {GREEN}●{RESET}{DIM}=live  {YELLOW}●{RESET}{DIM}=stale  {RED}●{RESET}{DIM}=dead"
-              f"  │  Net = Gross − 0.20% fees  │  Opps = positive gross spread events")
-        print(f"  Log file: {OPP_LOG_FILE} (CSV with timestamps, prices, depths){RESET}")
+        # Structure metadata (for frontend grouping)
+        "categories": CATEGORIES,
+        "tokens": TOKENS,
 
-        print(f"\n  {DIM}Press Ctrl+C to stop{RESET}")
+        # Per-token data (the main payload)
+        "token_data": token_data,
+    }
 
-        await asyncio.sleep(DISPLAY_REFRESH)
+
+async def broadcast_state(threshold: float):
+    """Broadcast full LiveState JSON to all connected WebSocket clients at 10fps."""
+    # Wait for feeds to warm up before broadcasting
+    await asyncio.sleep(3)
+
+    while True:
+        if connected_clients:
+            try:
+                payload = json.dumps(serialize_state(threshold))
+                websockets.broadcast(connected_clients, payload)
+            except Exception as e:
+                print(f"[ws_server] Broadcast error: {e}")
+        await asyncio.sleep(WS_BROADCAST_INTERVAL)
 
 
 # ── Main orchestrator ────────────────────────────────────────────
 
-async def main(threshold: float):
-    """Start all WebSocket feeds, opportunity detector, and display loop."""
+async def main(threshold: float, port: int = 8765):
+    """Start all WebSocket feeds, opportunity detector, and broadcast loop."""
     binance  = ccxt.binance({"options": {"defaultType": "spot"}})
     backpack = ccxt.backpack()
 
-    print(f"{CYAN}⚡ Starting WebSocket connections to Binance and Backpack...{RESET}")
-    print(f"{DIM}   Subscribing to {len(TOKENS)} orderbooks on each exchange...{RESET}")
-    print(f"{DIM}   Opportunities will be logged to: {OPP_LOG_FILE}{RESET}")
+    # Start WebSocket broadcast server
+    server = await websockets.serve(ws_handler, "127.0.0.1", port)
+    print(f"[ws_server] ⚡ WebSocket server running on ws://127.0.0.1:{port}")
+    print(f"[ws_server] Subscribing to {len(TOKENS)} orderbooks on Binance + Backpack...")
+    print(f"[ws_server] Threshold: {threshold}%  |  Broadcast: {int(1/WS_BROADCAST_INTERVAL)}fps")
+    print(f"[ws_server] Opportunity log: {OPP_LOG_FILE}")
 
     tasks = []
 
@@ -541,44 +450,52 @@ async def main(threshold: float):
     # Opportunity detector (runs 20x/sec)
     tasks.append(asyncio.create_task(opportunity_detector()))
 
-    # Display loop
-    tasks.append(asyncio.create_task(display_loop(threshold)))
+    # WebSocket broadcast loop (10fps)
+    tasks.append(asyncio.create_task(broadcast_state(threshold)))
 
     try:
         await asyncio.gather(*tasks)
     except KeyboardInterrupt:
         pass
     finally:
-        print(f"\n{YELLOW}Closing WebSocket connections...{RESET}")
+        print(f"\n[ws_server] Shutting down...")
+        server.close()
         for task in tasks:
             task.cancel()
         await binance.close()
         await backpack.close()
 
-        # Print final summary
-        print(f"\n{BOLD}{'═' * 60}{RESET}")
-        print(f"{BOLD}  SESSION SUMMARY{RESET}")
-        print(f"{'─' * 60}")
+        # Print session summary
         uptime = int(time.monotonic() - state.started_at)
+        print(f"\n{'═' * 60}")
+        print(f"  SESSION SUMMARY")
+        print(f"{'─' * 60}")
         print(f"  Uptime         : {uptime // 3600}h{(uptime % 3600) // 60:02d}m{uptime % 60:02d}s")
         print(f"  Total opps     : {state.opp_total}")
         for t in TOKENS:
             c = state.opp_count.get(t, 0)
             b = state.opp_best.get(t, 0)
-            print(f"    {t:<8}: {c:>4} opps  |  best: {b:+.3f}%")
+            if c > 0:
+                print(f"    {t:<8}: {c:>4} opps  |  best: {b:+.3f}%")
         print(f"  Log file       : {OPP_LOG_FILE}")
         print(f"{'═' * 60}")
-        print(f"{GREEN}Monitor stopped cleanly.{RESET}")
+        print(f"Server stopped cleanly.")
 
 
 # ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
     threshold = DEFAULT_THRESHOLD
+    port = 8765
 
     args = sys.argv[1:]
     if "--threshold" in args:
         try:
             threshold = float(args[args.index("--threshold") + 1])
+        except (ValueError, IndexError):
+            pass
+    if "--port" in args:
+        try:
+            port = int(args[args.index("--port") + 1])
         except (ValueError, IndexError):
             pass
 
@@ -589,6 +506,6 @@ if __name__ == "__main__":
         pass
 
     try:
-        asyncio.run(main(threshold))
+        asyncio.run(main(threshold, port))
     except KeyboardInterrupt:
-        print(f"\n{YELLOW}Monitor stopped.{RESET}")
+        print(f"\n[ws_server] Monitor stopped.")
