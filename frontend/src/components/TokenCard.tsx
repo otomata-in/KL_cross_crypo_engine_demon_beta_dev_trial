@@ -5,7 +5,8 @@ import { TokenSpreadBar } from './TokenSpreadBar';
 interface TokenCardProps {
   token: string;
   data: TokenData;
-  threshold: number;
+  threshold: number;  // This is the user's desired NET profit threshold
+  totalFeesPct: number;
 }
 
 function formatPrice(price: number | null): string {
@@ -23,9 +24,16 @@ function AgeIndicator({ ageMs }: { ageMs: number | null }) {
   return <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />;
 }
 
-export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold }) => {
-  const bestSpread = Math.max(data.spread_buy_bin ?? -Infinity, data.spread_buy_bp ?? -Infinity);
-  const isHot = bestSpread >= threshold;
+export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold, totalFeesPct }) => {
+  // Use NET spread (after all costs) for all highlighting decisions
+  const bestNetSpread = Math.max(data.net_spread_buy_bin ?? -Infinity, data.net_spread_buy_bp ?? -Infinity);
+  const bestGrossSpread = Math.max(data.spread_buy_bin ?? -Infinity, data.spread_buy_bp ?? -Infinity);
+  
+  // An opportunity is "hot" when net profit >= user's threshold
+  const isHot = bestNetSpread >= threshold;
+
+  // The spread bar shows NET spread (what you actually take home)
+  const displaySpread = bestNetSpread > -Infinity ? bestNetSpread : null;
 
   return (
     <div className={`rounded-xl border p-3 transition-all duration-300 ${
@@ -33,14 +41,36 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold }) 
         ? 'bg-green-950/20 border-green-500/30 shadow-lg shadow-green-500/5'
         : 'bg-card border-border hover:border-border-subtle hover:bg-card-hover'
     }`}>
-      {/* Spread bars */}
+      {/* Spread bar — shows NET spread */}
       <div className="space-y-1.5 mb-3">
         <TokenSpreadBar
-          token={`${token}`}
-          spread={bestSpread > -Infinity ? bestSpread : null}
+          token={token}
+          spread={displaySpread}
           threshold={threshold}
         />
       </div>
+
+      {/* Gross vs Net breakdown */}
+      {bestGrossSpread > -Infinity && (
+        <div className="mb-2.5 px-1 flex items-center justify-between text-[10px] font-mono">
+          <div className="flex items-center gap-2">
+            <span className="text-gray-600">gross:</span>
+            <span className={bestGrossSpread > 0 ? 'text-yellow-400/70' : 'text-red-400/70'}>
+              {bestGrossSpread > 0 ? '+' : ''}{bestGrossSpread.toFixed(3)}%
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-gray-700">−{totalFeesPct.toFixed(2)}%</span>
+            <span className="text-gray-700">=</span>
+            <span className={`font-semibold ${
+              bestNetSpread >= threshold ? 'text-green-400' :
+              bestNetSpread > 0 ? 'text-yellow-400' : 'text-red-400'
+            }`}>
+              net: {bestNetSpread > 0 ? '+' : ''}{bestNetSpread.toFixed(3)}%
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Price grid */}
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -97,12 +127,12 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold }) 
             </span>
           )}
         </div>
-        {data.session_high !== null && (
+        {data.session_high_net !== null && (
           <span className={`font-mono ${
-            data.session_high >= threshold ? 'text-green-400' :
-            data.session_high > 0 ? 'text-yellow-500/70' : 'text-gray-700'
+            data.session_high_net >= threshold ? 'text-green-400' :
+            data.session_high_net > 0 ? 'text-yellow-500/70' : 'text-gray-700'
           }`}>
-            hi: {data.session_high > 0 ? '+' : ''}{data.session_high.toFixed(3)}%
+            net hi: {data.session_high_net > 0 ? '+' : ''}{data.session_high_net.toFixed(3)}%
           </span>
         )}
       </div>

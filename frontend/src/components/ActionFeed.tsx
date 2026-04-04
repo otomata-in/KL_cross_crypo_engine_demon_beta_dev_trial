@@ -14,6 +14,7 @@ let entryId = 0;
 
 export const ActionFeed: React.FC = () => {
   const liveState = useArbitrageStore((s) => s.liveState);
+  const threshold = useArbitrageStore((s) => s.threshold);
   const [entries, setEntries] = useState<FeedEntry[]>([]);
   const prevOppLastRef = useRef<Record<string, string>>({});
   const containerRef = useRef<HTMLDivElement>(null);
@@ -26,6 +27,9 @@ export const ActionFeed: React.FC = () => {
     for (const [token, opp] of Object.entries(liveState.token_data)) {
       const oppLast = opp.opp_last;
       if (!oppLast) continue;
+
+      // Only show opportunities where net profit meets the threshold
+      if (oppLast.net < threshold) continue;
 
       // Check if this is a new opportunity (different time from last seen)
       const key = `${token}-${oppLast.time}-${oppLast.direction}`;
@@ -43,7 +47,7 @@ export const ActionFeed: React.FC = () => {
     if (newEntries.length > 0) {
       setEntries((prev) => [...newEntries, ...prev].slice(0, 50)); // keep last 50
     }
-  }, [liveState]);
+  }, [liveState, threshold]);
 
   // Auto-scroll to top for newest entries
   useEffect(() => {
@@ -52,12 +56,16 @@ export const ActionFeed: React.FC = () => {
     }
   }, [entries.length]);
 
-  if (entries.length === 0) {
+  // Filter existing entries by current threshold at render time
+  // (so raising the slider hides old entries that no longer qualify)
+  const filteredEntries = entries.filter((e) => e.opp.net >= threshold);
+
+  if (filteredEntries.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-gray-700 text-sm italic">
         <div className="text-center">
           <ArrowRightLeft className="w-8 h-8 mx-auto mb-2 text-gray-800" />
-          <p>Waiting for opportunities...</p>
+          <p>No opportunities above {threshold.toFixed(1)}% net</p>
         </div>
       </div>
     );
@@ -65,7 +73,7 @@ export const ActionFeed: React.FC = () => {
 
   return (
     <div ref={containerRef} className="h-full overflow-y-auto space-y-1 pr-1">
-      {entries.map((entry) => {
+      {filteredEntries.map((entry) => {
         const isProfit = entry.opp.net > 0;
         return (
           <div

@@ -51,8 +51,19 @@ for cat, tokens in CATEGORIES.items():
 BINANCE_PAIRS  = {t: f"{t}/USDT" for t in TOKENS}
 BACKPACK_PAIRS = {t: f"{t}/USDC" for t in TOKENS}
 
-DEFAULT_THRESHOLD = 1.0    # % spread to highlight
+DEFAULT_THRESHOLD = 1.0    # % net profit to highlight (synced to frontend on connect)
 WS_BROADCAST_INTERVAL = 0.1  # 100ms = 10fps
+
+# ── Fee / Cost Model ─────────────────────────────────────────────
+# All values in percentage (%). These represent the total round-trip
+# cost of executing an arbitrage trade.
+FEES = {
+    "binance_taker":    0.10,   # Binance spot taker fee
+    "backpack_taker":   0.10,   # Backpack spot taker fee
+    "solana_gas":       0.01,   # Solana network tx fee (~$0.01 per tx, estimated as % of ~$100 trade)
+    # Add withdrawal/deposit fees here if applicable
+}
+TOTAL_FEES_PCT = sum(FEES.values())  # e.g. 0.21%
 
 # Opportunity detection: any gross spread > 0% is a potential opportunity
 OPP_MIN_SPREAD    = 0.0
@@ -202,7 +213,7 @@ async def opportunity_detector():
     and logs them to CSV + updates counters.
     Runs at ~20 checks/sec to catch fleeting opportunities.
     """
-    COMBINED_FEE_PCT = 0.20  # 0.1% Binance taker + 0.1% Backpack taker
+    COMBINED_FEE_PCT = TOTAL_FEES_PCT  # exchange fees + gas (see FEES dict)
 
     await asyncio.sleep(5)  # let feeds warm up
 
@@ -333,17 +344,22 @@ def serialize_state(threshold: float) -> dict:
         # Compute spreads if we have all prices
         spread_buy_bin = None
         spread_buy_bp = None
+        net_buy_bin = None
+        net_buy_bp = None
         if all([b_bid, b_ask, p_bid, p_ask]):
             p_bid_usdt = p_bid / usdt_usdc
             p_ask_usdt = p_ask / usdt_usdc
             spread_buy_bin = round(((p_bid_usdt - b_ask) / b_ask) * 100, 4)
             spread_buy_bp  = round(((b_bid - p_ask_usdt) / p_ask_usdt) * 100, 4)
+            net_buy_bin = round(spread_buy_bin - TOTAL_FEES_PCT, 4)
+            net_buy_bp  = round(spread_buy_bp - TOTAL_FEES_PCT, 4)
 
-        # Session highs
+        # Session highs (using net spread for meaningful comparison)
         sh = state.spread_history[token]
-        session_high = max(sh["max_buy_bin"], sh["max_buy_bp"])
-        if session_high <= -999:
-            session_high = None
+        session_high_gross = max(sh["max_buy_bin"], sh["max_buy_bp"])
+        session_high_net = round(session_high_gross - TOTAL_FEES_PCT, 4) if session_high_gross > -999 else None
+        if session_high_gross <= -999:
+            session_high_gross = None
 
         token_data[token] = {
             "category": TOKEN_CATEGORY[token],
@@ -363,9 +379,12 @@ def serialize_state(threshold: float) -> dict:
                 "age_ms": int((now_mono - pd["updated"]) * 1000) if pd.get("updated") else None,
                 "status": state.ws_status["backpack"].get(token, "disconnected"),
             },
-            "spread_buy_bin": spread_buy_bin,   # Buy on Binance → Sell on Backpack
-            "spread_buy_bp": spread_buy_bp,     # Buy on Backpack → Sell on Binance
-            "session_high": session_high,
+            "spread_buy_bin": spread_buy_bin,       # Gross: Buy on Binance → Sell on Backpack
+            "spread_buy_bp": spread_buy_bp,         # Gross: Buy on Backpack → Sell on Binance
+            "net_spread_buy_bin": net_buy_bin,       # Net: gross - total_fees
+            "net_spread_buy_bp": net_buy_bp,         # Net: gross - total_fees
+            "session_high_gross": session_high_gross,
+            "session_high_net": session_high_net,
             "opp_count": state.opp_count.get(token, 0),
             "opp_best": round(state.opp_best[token], 4) if token in state.opp_best else None,
             "opp_last": state.opp_last.get(token),
@@ -379,6 +398,10 @@ def serialize_state(threshold: float) -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "uptime_seconds": uptime,
         "threshold": threshold,
+
+        # Fee model (so frontend can display the cost breakdown)
+        "fees": FEES,
+        "total_fees_pct": TOTAL_FEES_PCT,
 
         # Exchange connectivity
         "binance_connected": bin_connected,

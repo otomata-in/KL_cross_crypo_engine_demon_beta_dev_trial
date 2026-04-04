@@ -4,10 +4,11 @@ import { TokenCard } from './TokenCard';
 
 export const TokenGrid: React.FC = () => {
   const liveState = useArbitrageStore((s) => s.liveState);
+  const threshold = useArbitrageStore((s) => s.threshold);
 
   if (!liveState) return null;
 
-  const { categories, token_data, threshold } = liveState;
+  const { categories, token_data, total_fees_pct } = liveState;
 
   return (
     <div className="space-y-6">
@@ -31,6 +32,7 @@ export const TokenGrid: React.FC = () => {
                   token={token}
                   data={data}
                   threshold={threshold}
+                  totalFeesPct={total_fees_pct}
                 />
               );
             })}

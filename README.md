@@ -269,3 +269,9 @@ tail -f logs/trades.csv
 - Arbitrage opportunities for PIPPIN may diminish as the market matures.
 - Always monitor the first 24 hours of live trading manually.
 - Keep exchange API withdrawal permissions minimal (Binance: none).
+
+
+
+./start.sh                  # launches backend + frontend
+# or just the backend:
+source venv/bin/activate && python ws_server.py
