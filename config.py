@@ -22,8 +22,8 @@ class Config(BaseSettings):
     # ── Exchange credentials ───────────────────────────────────────
     API_KEY_BINANCE:    str = ""
     API_SECRET_BINANCE: str = ""
-    API_KEY_MEXC:       str = ""
-    API_SECRET_MEXC:    str = ""
+    API_KEY_BACKPACK:       str = ""
+    API_SECRET_BACKPACK:    str = ""
 
     # ── Asset ──────────────────────────────────────────────────────
     SYMBOL:      str = "PIPPIN/USDT"

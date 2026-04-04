@@ -69,8 +69,8 @@ MOCK_MODE=true
 # Real API keys are needed for price feeds even in mock mode
 API_KEY_BINANCE=your_key
 API_SECRET_BINANCE=your_secret
-API_KEY_MEXC=your_key
-API_SECRET_MEXC=your_secret
+API_KEY_BACKPACK=your_key
+API_SECRET_BACKPACK=your_secret
 
 # Telegram (optional but recommended)
 TELEGRAM_BOT_TOKEN=your_token

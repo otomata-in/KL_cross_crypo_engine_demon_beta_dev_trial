@@ -71,8 +71,8 @@ class TestMockExchange:
         os.environ.setdefault("MOCK_MODE", "true")
         os.environ.setdefault("API_KEY_BINANCE", "test")
         os.environ.setdefault("API_SECRET_BINANCE", "test")
-        os.environ.setdefault("API_KEY_MEXC", "test")
-        os.environ.setdefault("API_SECRET_MEXC", "test")
+        os.environ.setdefault("API_KEY_BACKPACK", "test")
+        os.environ.setdefault("API_SECRET_BACKPACK", "test")
         from engine.mock_exchange import MockExchange
         self.ex = MockExchange("binance", MockOrderbookCache())
 
@@ -139,8 +139,8 @@ class TestLogic:
         os.environ.setdefault("MOCK_MODE", "true")
         os.environ.setdefault("API_KEY_BINANCE", "test")
         os.environ.setdefault("API_SECRET_BINANCE", "test")
-        os.environ.setdefault("API_KEY_MEXC", "test")
-        os.environ.setdefault("API_SECRET_MEXC", "test")
+        os.environ.setdefault("API_KEY_BACKPACK", "test")
+        os.environ.setdefault("API_SECRET_BACKPACK", "test")
         from engine.logic import Logic
         self.logic = Logic(MinimalScanner())
 

@@ -13,10 +13,9 @@ interface ArbitrageStore {
   threshold: number;
   _thresholdInitialized: boolean;
   
-  // Actions
-  setLiveState: (state: LiveState) => void;
-  setWsStatus: (status: ConnectionStatus) => void;
-  setThreshold: (threshold: number) => void;
+  // View mode
+  viewMode: 'cards' | 'heatmap';
+  setViewMode: (mode: 'cards' | 'heatmap') => void;
 }
 
 export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
@@ -25,6 +24,7 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
   lastUpdateAt: null,
   threshold: 1.0,
   _thresholdInitialized: false,
+  viewMode: 'cards',
 
   setLiveState: (liveState) => {
     const state = get();
@@ -46,4 +46,6 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
 
   setThreshold: (threshold) =>
     set({ threshold: Math.max(-2.0, Math.min(15, threshold)), _thresholdInitialized: true }),
+
+  setViewMode: (viewMode) => set({ viewMode }),
 }));

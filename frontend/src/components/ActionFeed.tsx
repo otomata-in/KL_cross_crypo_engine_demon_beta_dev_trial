@@ -45,7 +45,7 @@ export const ActionFeed: React.FC = () => {
     }
 
     if (newEntries.length > 0) {
-      setEntries((prev) => [...newEntries, ...prev].slice(0, 50)); // keep last 50
+      setEntries((prev) => [...newEntries, ...prev].slice(0, 50));
     }
   }, [liveState, threshold]);
 
@@ -57,7 +57,6 @@ export const ActionFeed: React.FC = () => {
   }, [entries.length]);
 
   // Filter existing entries by current threshold at render time
-  // (so raising the slider hides old entries that no longer qualify)
   const filteredEntries = entries.filter((e) => e.opp.net >= threshold);
 
   if (filteredEntries.length === 0) {
@@ -65,7 +64,7 @@ export const ActionFeed: React.FC = () => {
       <div className="h-full flex items-center justify-center text-gray-700 text-sm italic">
         <div className="text-center">
           <ArrowRightLeft className="w-8 h-8 mx-auto mb-2 text-gray-800" />
-          <p>No opportunities above {threshold.toFixed(1)}% net</p>
+          <p>No opportunities above {threshold.toFixed(3)}% net</p>
         </div>
       </div>
     );
@@ -87,6 +86,7 @@ export const ActionFeed: React.FC = () => {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="font-bold text-white">{entry.token}</span>
+                <span className="text-purple-400/80 text-[10px]">{entry.opp.pair ?? ''}</span>
                 <span className="text-gray-600">{entry.opp.direction}</span>
               </div>
               <span className="text-gray-600">{entry.opp.time}</span>

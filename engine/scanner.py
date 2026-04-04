@@ -75,8 +75,8 @@ class Scanner:
             "options": {"defaultType": "spot"},
         })
         self.mexc = ccxt.mexc({
-            "apiKey": cfg.API_KEY_MEXC,
-            "secret": cfg.API_SECRET_MEXC,
+            "apiKey": cfg.API_KEY_BACKPACK,
+            "secret": cfg.API_SECRET_BACKPACK,
         })
         self.books: dict[str, OrderbookCache] = {
             "binance": OrderbookCache("binance"),

@@ -95,8 +95,8 @@ class Rebalancer:
             )
 
         mexc = ccxt.mexc({
-            "apiKey": cfg.API_KEY_MEXC,
-            "secret": cfg.API_SECRET_MEXC,
+            "apiKey": cfg.API_KEY_BACKPACK,
+            "secret": cfg.API_SECRET_BACKPACK,
         })
         binance = ccxt.binance({
             "apiKey":  cfg.API_KEY_BINANCE,

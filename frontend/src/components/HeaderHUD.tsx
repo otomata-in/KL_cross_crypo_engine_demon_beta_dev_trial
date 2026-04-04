@@ -1,7 +1,7 @@
 import React from 'react';
 import type { ConnectionStatus } from '../types';
 import { useArbitrageStore } from '../store';
-import { Activity, Zap, Clock, TrendingUp, SlidersHorizontal } from 'lucide-react';
+import { Activity, Zap, Clock, TrendingUp, SlidersHorizontal, LayoutGrid, Table } from 'lucide-react';
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -32,25 +32,30 @@ export const HeaderHUD: React.FC = () => {
   const wsStatus = useArbitrageStore((s) => s.wsStatus);
   const threshold = useArbitrageStore((s) => s.threshold);
   const setThreshold = useArbitrageStore((s) => s.setThreshold);
+  const viewMode = useArbitrageStore((s) => s.viewMode);
+  const setViewMode = useArbitrageStore((s) => s.setViewMode);
 
-  const binConn = liveState?.binance_connected ?? 0;
-  const bpConn = liveState?.backpack_connected ?? 0;
-  const total = liveState?.total_tokens ?? 0;
   const rate = liveState?.usdt_usdc_rate ?? 1.0;
   const pegDev = (rate - 1.0) * 100;
   const uptime = liveState?.uptime_seconds ?? 0;
   const oppTotal = liveState?.opp_total ?? 0;
-  const binTicks = liveState?.update_count?.binance ?? 0;
-  const bpTicks = liveState?.update_count?.backpack ?? 0;
+
+  // Dynamic exchange list from backend
+  const exchangesList = liveState?.exchanges_list ?? [];
+  const exchangeMeta = liveState?.exchange_meta ?? {};
+  const updateCount = liveState?.update_count ?? {};
+
+  // Build exchange subtitle: "Binance ↔ Backpack ↔ Bybit ↔ Dex-Trade"
+  const exchangeLabels = exchangesList.map(ex => exchangeMeta[ex]?.label ?? ex.toUpperCase());
+  const subtitle = exchangeLabels.join(' ↔ ');
 
   // Count tokens where best net spread RIGHT NOW meets the threshold
   const activeOpps = liveState ? Object.values(liveState.token_data).filter((td) => {
-    const bestNet = Math.max(td.net_spread_buy_bin ?? -Infinity, td.net_spread_buy_bp ?? -Infinity);
-    return bestNet >= threshold;
+    return (td.best_net ?? -Infinity) >= threshold;
   }).length : 0;
 
-  const binStatus = binConn === total ? 'connected' : binConn > 0 ? 'connecting' : 'disconnected';
-  const bpStatus = bpConn === total ? 'connected' : bpConn > 0 ? 'connecting' : 'disconnected';
+  // Total ticks across all exchanges
+  const totalTicks = exchangesList.reduce((sum, ex) => sum + (updateCount[ex] ?? 0), 0);
 
   return (
     <header className="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-50">
@@ -63,7 +68,7 @@ export const HeaderHUD: React.FC = () => {
               Arbitrage Dashboard
             </h1>
           </div>
-          <span className="text-xs text-gray-500 font-mono ml-2">Binance ↔ Backpack</span>
+          <span className="text-xs text-gray-500 font-mono ml-2">{subtitle}</span>
         </div>
 
         {/* Threshold control + Uptime */}
@@ -97,10 +102,24 @@ export const HeaderHUD: React.FC = () => {
                 focus:outline-none focus:border-accent/50"
             />
             <span className="text-[10px] text-gray-600">%</span>
-            {/* Fee info tooltip */}
-            <span className="text-[10px] text-gray-600 ml-1" title={`Binance: ${liveState?.fees?.binance_taker ?? 0.1}% + Backpack: ${liveState?.fees?.backpack_taker ?? 0.1}% + Gas: ${liveState?.fees?.solana_gas ?? 0.01}%`}>
-              (fees: {(liveState?.total_fees_pct ?? 0.21).toFixed(2)}%)
-            </span>
+          </div>
+
+          {/* View Mode Toggle */}
+          <div className="flex items-center bg-gray-900/50 rounded-lg p-0.5 border border-border">
+            <button
+              onClick={() => setViewMode('cards')}
+              className={`p-1.5 rounded-md transition-colors ${viewMode === 'cards' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
+              title="Card Grid View"
+            >
+               <LayoutGrid className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setViewMode('heatmap')}
+              className={`p-1.5 rounded-md transition-colors ${viewMode === 'heatmap' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
+              title="Heatmap View"
+            >
+               <Table className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* Uptime */}
@@ -112,7 +131,7 @@ export const HeaderHUD: React.FC = () => {
       </div>
 
       {/* Status strip */}
-      <div className="px-4 pb-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
+      <div className="px-4 pb-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
         {/* WebSocket to backend */}
         <div className="flex items-center gap-1.5">
           <StatusDot status={wsStatus} />
@@ -124,32 +143,33 @@ export const HeaderHUD: React.FC = () => {
 
         <div className="w-px h-4 bg-border" />
 
-        {/* Binance */}
-        <div className="flex items-center gap-1.5">
-          <StatusDot status={binStatus} />
-          <span className="text-gray-400">BIN</span>
-          <span className={`font-mono ${binConn === total ? 'text-green-400' : 'text-yellow-400'}`}>
-            {binConn}/{total}
-          </span>
-        </div>
-
-        {/* Backpack */}
-        <div className="flex items-center gap-1.5">
-          <StatusDot status={bpStatus} />
-          <span className="text-gray-400">BP</span>
-          <span className={`font-mono ${bpConn === total ? 'text-green-400' : 'text-yellow-400'}`}>
-            {bpConn}/{total}
-          </span>
-        </div>
+        {/* Dynamic exchange status — one dot per exchange */}
+        {exchangesList.map((ex) => {
+          const meta = exchangeMeta[ex];
+          if (!meta) return null;
+          const conn = meta.connected;
+          const tot = meta.total;
+          const exStatus: ConnectionStatus = conn === tot && tot > 0
+            ? 'connected'
+            : conn > 0 ? 'connecting' : 'disconnected';
+          return (
+            <div key={ex} className="flex items-center gap-1.5">
+              <StatusDot status={exStatus} />
+              <span className="text-gray-400">{meta.label}</span>
+              <span className={`font-mono ${conn === tot && tot > 0 ? 'text-green-400' : conn > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                {conn}/{tot}
+              </span>
+            </div>
+          );
+        })}
 
         <div className="w-px h-4 bg-border" />
 
-        {/* Ticks */}
+        {/* Total ticks */}
         <div className="flex items-center gap-1.5 text-gray-500">
           <Activity className="w-3 h-3" />
-          <span className="font-mono">{binTicks.toLocaleString()}</span>
-          <span>/</span>
-          <span className="font-mono">{bpTicks.toLocaleString()}</span>
+          <span className="font-mono">{totalTicks.toLocaleString()}</span>
+          <span className="text-[10px] text-gray-700">ticks</span>
         </div>
 
         <div className="w-px h-4 bg-border" />
@@ -168,7 +188,7 @@ export const HeaderHUD: React.FC = () => {
 
         <div className="flex-1" />
 
-        {/* Opportunities counter — shows tokens currently above threshold */}
+        {/* Opportunities counter */}
         <div className="flex items-center gap-1.5">
           <TrendingUp className={`w-3.5 h-3.5 ${activeOpps > 0 ? 'text-green-400' : 'text-gray-600'}`} />
           <span className={`font-mono font-bold ${activeOpps > 0 ? 'text-green-400' : 'text-gray-600'}`}>

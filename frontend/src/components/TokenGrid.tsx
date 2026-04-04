@@ -8,7 +8,13 @@ export const TokenGrid: React.FC = () => {
 
   if (!liveState) return null;
 
-  const { categories, token_data, total_fees_pct } = liveState;
+  const { categories, token_data, exchanges_list, exchange_meta } = liveState;
+
+  // Build exchange label lookup: "binance" -> "BIN"
+  const exchangeLabels: Record<string, string> = {};
+  for (const ex of exchanges_list) {
+    exchangeLabels[ex] = exchange_meta[ex]?.label ?? ex.toUpperCase();
+  }
 
   return (
     <div className="space-y-6">
@@ -22,7 +28,7 @@ export const TokenGrid: React.FC = () => {
           </div>
 
           {/* Token cards grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
             {tokens.map((token) => {
               const data = token_data[token];
               if (!data) return null;
@@ -32,7 +38,8 @@ export const TokenGrid: React.FC = () => {
                   token={token}
                   data={data}
                   threshold={threshold}
-                  totalFeesPct={total_fees_pct}
+                  exchangesList={exchanges_list}
+                  exchangeLabels={exchangeLabels}
                 />
               );
             })}

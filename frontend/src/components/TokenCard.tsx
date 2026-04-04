@@ -5,8 +5,9 @@ import { TokenSpreadBar } from './TokenSpreadBar';
 interface TokenCardProps {
   token: string;
   data: TokenData;
-  threshold: number;  // This is the user's desired NET profit threshold
-  totalFeesPct: number;
+  threshold: number;
+  exchangesList: string[];
+  exchangeLabels: Record<string, string>; // "binance" -> "BIN"
 }
 
 function formatPrice(price: number | null): string {
@@ -24,16 +25,28 @@ function AgeIndicator({ ageMs }: { ageMs: number | null }) {
   return <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />;
 }
 
-export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold, totalFeesPct }) => {
-  // Use NET spread (after all costs) for all highlighting decisions
-  const bestNetSpread = Math.max(data.net_spread_buy_bin ?? -Infinity, data.net_spread_buy_bp ?? -Infinity);
-  const bestGrossSpread = Math.max(data.spread_buy_bin ?? -Infinity, data.spread_buy_bp ?? -Infinity);
-  
-  // An opportunity is "hot" when net profit >= user's threshold
-  const isHot = bestNetSpread >= threshold;
+export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold, exchangesList, exchangeLabels }) => {
+  const bestNet = data.best_net ?? -Infinity;
+  const bestGross = data.best_gross ?? -Infinity;
+  const bestFees = data.best_fees ?? 0;
+  const bestLabel = data.best_net_label ?? '';
 
-  // The spread bar shows NET spread (what you actually take home)
-  const displaySpread = bestNetSpread > -Infinity ? bestNetSpread : null;
+  // An opportunity is "hot" when best net profit >= user's threshold
+  const isHot = bestNet >= threshold && bestNet > -Infinity;
+
+  const displaySpread = bestNet > -Infinity ? bestNet : null;
+
+  // Only show exchanges that have data for this token
+  const activeExchanges = exchangesList.filter(ex => {
+    const exData = data.exchanges[ex];
+    return exData && exData.status !== 'disconnected' && (exData.bid !== null || exData.ask !== null);
+  });
+
+  // Get the top spread pairs (sorted by net, descending) — show top 4
+  const validPairs = data.spread_pairs
+    .filter(sp => sp.net !== null)
+    .sort((a, b) => (b.net ?? -Infinity) - (a.net ?? -Infinity))
+    .slice(0, 4);
 
   return (
     <div className={`rounded-xl border p-3 transition-all duration-300 ${
@@ -41,78 +54,95 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold, to
         ? 'bg-green-950/20 border-green-500/30 shadow-lg shadow-green-500/5'
         : 'bg-card border-border hover:border-border-subtle hover:bg-card-hover'
     }`}>
-      {/* Spread bar — shows NET spread */}
+      {/* Spread bar — shows BEST NET spread */}
       <div className="space-y-1.5 mb-3">
         <TokenSpreadBar
           token={token}
           spread={displaySpread}
           threshold={threshold}
+          pairLabel={bestLabel}
         />
       </div>
 
-      {/* Gross vs Net breakdown */}
-      {bestGrossSpread > -Infinity && (
+      {/* Best pair gross vs net breakdown */}
+      {bestGross > -Infinity && (
         <div className="mb-2.5 px-1 flex items-center justify-between text-[10px] font-mono">
           <div className="flex items-center gap-2">
-            <span className="text-gray-600">gross:</span>
-            <span className={bestGrossSpread > 0 ? 'text-yellow-400/70' : 'text-red-400/70'}>
-              {bestGrossSpread > 0 ? '+' : ''}{bestGrossSpread.toFixed(3)}%
-            </span>
+            <span className="text-gray-600">best:</span>
+            <span className="text-purple-400/80 font-semibold">{bestLabel}</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-gray-700">−{totalFeesPct.toFixed(2)}%</span>
+            <span className={bestGross > 0 ? 'text-yellow-400/70' : 'text-red-400/70'}>
+              {bestGross > 0 ? '+' : ''}{bestGross.toFixed(3)}%
+            </span>
+            <span className="text-gray-700">−{bestFees.toFixed(2)}%</span>
             <span className="text-gray-700">=</span>
             <span className={`font-semibold ${
-              bestNetSpread >= threshold ? 'text-green-400' :
-              bestNetSpread > 0 ? 'text-yellow-400' : 'text-red-400'
+              bestNet >= threshold ? 'text-green-400' :
+              bestNet > 0 ? 'text-yellow-400' : 'text-red-400'
             }`}>
-              net: {bestNetSpread > 0 ? '+' : ''}{bestNetSpread.toFixed(3)}%
+              {bestNet > 0 ? '+' : ''}{bestNet.toFixed(3)}%
             </span>
           </div>
         </div>
       )}
 
-      {/* Price grid */}
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        {/* Binance */}
-        <div className="space-y-1">
-          <div className="flex items-center gap-1 text-gray-500">
-            <AgeIndicator ageMs={data.binance.age_ms} />
-            <span>Binance</span>
-          </div>
-          <div className="font-mono text-gray-300 space-y-0.5">
-            <div className="flex justify-between">
-              <span className="text-gray-600">Bid</span>
-              <span className="text-green-400/80">{formatPrice(data.binance.bid)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Ask</span>
-              <span className="text-red-400/80">{formatPrice(data.binance.ask)}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Backpack */}
-        <div className="space-y-1">
-          <div className="flex items-center gap-1 text-gray-500">
-            <AgeIndicator ageMs={data.backpack.age_ms} />
-            <span>Backpack</span>
-          </div>
-          <div className="font-mono text-gray-300 space-y-0.5">
-            <div className="flex justify-between">
-              <span className="text-gray-600">Bid</span>
-              <span className="text-green-400/80">{formatPrice(data.backpack.bid)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Ask</span>
-              <span className="text-red-400/80">{formatPrice(data.backpack.ask)}</span>
-            </div>
-          </div>
-        </div>
+      {/* Multi-exchange price table */}
+      <div className="overflow-x-auto mb-2">
+        <table className="w-full text-[10px] font-mono">
+          <thead>
+            <tr className="text-gray-600">
+              <th className="text-left pr-2 font-normal"></th>
+              {activeExchanges.map(ex => (
+                <th key={ex} className="text-right px-1 font-normal">
+                  <div className="flex items-center justify-end gap-1">
+                    <AgeIndicator ageMs={data.exchanges[ex]?.age_ms ?? null} />
+                    <span>{exchangeLabels[ex] ?? ex}</span>
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="text-gray-600 pr-2">Bid</td>
+              {activeExchanges.map(ex => (
+                <td key={ex} className="text-right px-1 text-green-400/80">
+                  {formatPrice(data.exchanges[ex]?.bid ?? null)}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <td className="text-gray-600 pr-2">Ask</td>
+              {activeExchanges.map(ex => (
+                <td key={ex} className="text-right px-1 text-red-400/80">
+                  {formatPrice(data.exchanges[ex]?.ask ?? null)}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
       </div>
 
+      {/* Top spread pairs */}
+      {validPairs.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] font-mono mb-2 px-1">
+          {validPairs.map((sp, i) => (
+            <div key={i} className="flex items-center justify-between">
+              <span className="text-gray-600 truncate">{sp.label}</span>
+              <span className={`ml-1 ${
+                (sp.net ?? 0) >= threshold ? 'text-green-400 font-semibold' :
+                (sp.net ?? 0) > 0 ? 'text-yellow-400/70' : 'text-red-400/60'
+              }`}>
+                {(sp.net ?? 0) > 0 ? '+' : ''}{(sp.net ?? 0).toFixed(3)}%
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Footer stats */}
-      <div className="mt-2.5 pt-2 border-t border-border flex items-center justify-between text-[10px]">
+      <div className="mt-1.5 pt-2 border-t border-border flex items-center justify-between text-[10px]">
         <div className="flex items-center gap-2">
           {data.opp_count > 0 ? (
             <span className="text-green-400 font-mono font-semibold">
@@ -132,7 +162,7 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, data, threshold, to
             data.session_high_net >= threshold ? 'text-green-400' :
             data.session_high_net > 0 ? 'text-yellow-500/70' : 'text-gray-700'
           }`}>
-            net hi: {data.session_high_net > 0 ? '+' : ''}{data.session_high_net.toFixed(3)}%
+            hi: {data.session_high_net > 0 ? '+' : ''}{data.session_high_net.toFixed(3)}%
           </span>
         )}
       </div>

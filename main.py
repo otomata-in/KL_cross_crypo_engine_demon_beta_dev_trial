@@ -191,7 +191,7 @@ class PAALV2:
             try:
                 import ccxt.async_support as ccxt
                 binance = ccxt.binance({"apiKey": cfg.API_KEY_BINANCE, "secret": cfg.API_SECRET_BINANCE})
-                mexc    = ccxt.mexc({"apiKey": cfg.API_KEY_MEXC, "secret": cfg.API_SECRET_MEXC})
+                mexc    = ccxt.mexc({"apiKey": cfg.API_KEY_BACKPACK, "secret": cfg.API_SECRET_BACKPACK})
                 b_bal   = await binance.fetch_balance()
                 m_bal   = await mexc.fetch_balance()
                 await binance.close()

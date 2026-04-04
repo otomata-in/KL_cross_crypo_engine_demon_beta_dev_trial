@@ -48,8 +48,8 @@ class FeeLedger:
                 "secret": cfg.API_SECRET_BINANCE,
             })
             mexc = ccxt.mexc({
-                "apiKey": cfg.API_KEY_MEXC,
-                "secret": cfg.API_SECRET_MEXC,
+                "apiKey": cfg.API_KEY_BACKPACK,
+                "secret": cfg.API_SECRET_BACKPACK,
             })
             try:
                 b_fees = await binance.fetch_trading_fee(cfg.SYMBOL)

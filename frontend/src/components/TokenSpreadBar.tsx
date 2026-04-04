@@ -4,9 +4,10 @@ interface TokenSpreadBarProps {
   token: string;
   spread: number | null;
   threshold: number;
+  pairLabel?: string;  // e.g. "BIN→BP"
 }
 
-export const TokenSpreadBar: React.FC<TokenSpreadBarProps> = ({ token, spread, threshold }) => {
+export const TokenSpreadBar: React.FC<TokenSpreadBarProps> = ({ token, spread, threshold, pairLabel }) => {
   if (spread === null) {
     return (
       <div className="flex items-center w-full h-10 px-4 bg-gray-900/50 rounded-lg border border-border">
@@ -50,9 +51,16 @@ export const TokenSpreadBar: React.FC<TokenSpreadBarProps> = ({ token, spread, t
 
       {/* Text overlay */}
       <div className="relative z-20 flex justify-between items-center w-full px-4 pointer-events-none">
-        <span className="text-white font-mono font-bold w-16 text-sm drop-shadow-md">
-          {token}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-white font-mono font-bold w-16 text-sm drop-shadow-md">
+            {token}
+          </span>
+          {pairLabel && (
+            <span className="text-purple-400/60 text-[9px] font-mono drop-shadow-md">
+              {pairLabel}
+            </span>
+          )}
+        </div>
         <span className={`font-mono text-xs font-bold drop-shadow-md ${
           isOpportunity ? 'text-white' :
           isPositive ? 'text-green-400' : 'text-red-400'

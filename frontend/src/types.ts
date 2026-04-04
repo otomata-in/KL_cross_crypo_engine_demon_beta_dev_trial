@@ -1,4 +1,5 @@
 // ── TypeScript types matching the ws_server.py JSON payload ──
+// Multi-exchange version: supports N exchanges, M pairs
 
 export interface ExchangeData {
   bid: number | null;
@@ -9,33 +10,49 @@ export interface ExchangeData {
   status: string; // "connected" | "disconnected" | "error:..."
 }
 
+export interface SpreadPair {
+  ex_buy:  string;    // "binance"
+  ex_sell: string;    // "bybit"
+  label:   string;    // "BIN→BYBIT"
+  gross:   number | null;
+  net:     number | null;
+  fees:    number;    // pair-specific total fees (%)
+}
+
 export interface OppLast {
   time: string;       // "14:23:05"
   spread: number;
   net: number;
-  direction: string;  // "BuyBIN→SellBP" | "BuyBP→SellBIN"
+  direction: string;  // "BuyBIN→SellBP"
+  pair: string;       // "binance→backpack"
 }
 
 export interface TokenData {
   category: string;
-  binance: ExchangeData;
-  backpack: ExchangeData;
-  spread_buy_bin: number | null;      // Gross: Buy on Binance → Sell on Backpack
-  spread_buy_bp: number | null;       // Gross: Buy on Backpack → Sell on Binance
-  net_spread_buy_bin: number | null;   // Net: gross - total_fees
-  net_spread_buy_bp: number | null;    // Net: gross - total_fees
-  session_high_gross: number | null;
+  exchanges: Record<string, ExchangeData>;  // keyed by exchange name
+  spread_pairs: SpreadPair[];               // all pair×direction spreads
+  best_net: number | null;                  // best net spread across all pairs
+  best_net_label: string | null;            // "BIN→BP"
+  best_gross: number | null;                // gross of the best net pair
+  best_fees: number | null;                 // fees of the best net pair
   session_high_net: number | null;
   opp_count: number;
   opp_best: number | null;
   opp_last: OppLast | null;
 }
 
-export interface FeeModel {
-  binance_taker: number;
-  backpack_taker: number;
-  solana_gas: number;
-  [key: string]: number;  // allow additional fee components
+export interface ExchangeMeta {
+  label: string;
+  quote: string;
+  connected: number;
+  total: number;
+}
+
+export interface PairFees {
+  ex_a: string;
+  ex_b: string;
+  label: string;     // "BIN↔BP"
+  total: number;
 }
 
 export interface LiveState {
@@ -43,15 +60,13 @@ export interface LiveState {
   uptime_seconds: number;
   threshold: number;
 
-  // Fee model
-  fees: FeeModel;
-  total_fees_pct: number;
+  // Multi-exchange info
+  exchanges_list: string[];                       // ["binance","backpack","bybit","dextrade"]
+  exchange_meta: Record<string, ExchangeMeta>;    // per-exchange status
+  pair_fees: Record<string, PairFees>;            // pair fee details
 
-  // Exchange connectivity
-  binance_connected: number;
-  backpack_connected: number;
   total_tokens: number;
-  update_count: { binance: number; backpack: number };
+  update_count: Record<string, number>;           // {binance: 1234, bybit: 567, ...}
 
   // Peg
   usdt_usdc_rate: number;

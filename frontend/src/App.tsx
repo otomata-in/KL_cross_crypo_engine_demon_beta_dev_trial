@@ -2,6 +2,7 @@ import { useArbitrageSocket } from './hooks/useArbitrageSocket';
 import { useArbitrageStore } from './store';
 import { HeaderHUD } from './components/HeaderHUD';
 import { TokenGrid } from './components/TokenGrid';
+import { MarketHeatmap } from './components/MarketHeatmap';
 import { ActionFeed } from './components/ActionFeed';
 import { WaitingScreen } from './components/WaitingScreen';
 
@@ -11,6 +12,7 @@ function App() {
 
   const liveState = useArbitrageStore((s) => s.liveState);
   const wsStatus = useArbitrageStore((s) => s.wsStatus);
+  const viewMode = useArbitrageStore((s) => s.viewMode);
 
   // Show waiting screen if not connected or no data yet
   if (!liveState || (wsStatus !== 'connected' && wsStatus !== 'connecting')) {
@@ -27,9 +29,9 @@ function App() {
       <HeaderHUD />
 
       <div className="flex h-[calc(100vh-88px)]">
-        {/* Main content — Token Grid */}
+        {/* Main content */}
         <main className="flex-1 overflow-y-auto p-4">
-          <TokenGrid />
+          {viewMode === 'cards' ? <TokenGrid /> : <MarketHeatmap />}
         </main>
 
         {/* Sidebar — Action Feed */}

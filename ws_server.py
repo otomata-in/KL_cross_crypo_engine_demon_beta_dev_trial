@@ -1,7 +1,7 @@
 """
-ws_server.py — Headless WebSocket Backend for Arbitrage Dashboard
-=================================================================
-Refactored from price_gap_monitor.py. All terminal display code removed.
+ws_server.py — Multi-Exchange Arbitrage Dashboard Backend
+==========================================================
+Monitors orderbooks across Binance, Backpack, Bybit, and Dex-Trade.
 Broadcasts LiveState as JSON over WebSocket at 10fps (ws://127.0.0.1:8765).
 
 Usage:
@@ -19,14 +19,75 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
+from itertools import combinations
 
 import ccxt.pro as ccxt
 import websockets
+from dotenv import load_dotenv
 
-# ── Configuration ────────────────────────────────────────────────
+from adapters.dextrade_adapter import DexTradeAdapter
 
-# The Elite 20: Arbitrage Candidates
-# Organized by category for dashboard grouping
+# Load environment variables from .env
+load_dotenv()
+
+# ── Exchange Configuration Registry ─────────────────────────────
+# Add any exchange by editing this dict. No code changes needed.
+
+EXCHANGES = {
+    "binance": {
+        "ccxt_id":    "binance",
+        "label":      "BIN",           # Short label for frontend
+        "quote":      "USDT",
+        "fee_taker":  0.10,            # %
+        "gas":        0.00,            # % (no blockchain transfer for CEX↔CEX)
+        "enabled":    True,
+        "options":    {"defaultType": "spot"},
+        "api_key":    os.getenv("API_KEY_BINANCE"),
+        "api_secret": os.getenv("API_SECRET_BINANCE"),
+    },
+    "backpack": {
+        "ccxt_id":    "backpack",
+        "label":      "BP",
+        "quote":      "USDC",
+        "fee_taker":  0.10,
+        "gas":        0.01,            # Solana network tx fee
+        "enabled":    True,
+        "options":    {},
+        "api_key":    os.getenv("API_KEY_BACKPACK"),
+        "api_secret": os.getenv("API_SECRET_BACKPACK"),
+    },
+    "bybit": {
+        "ccxt_id":    "bybit",
+        "label":      "BYBIT",
+        "quote":      "USDT",
+        "fee_taker":  0.10,
+        "gas":        0.00,
+        "enabled":    True,
+        "options":    {"defaultType": "spot"},
+        "api_key":    os.getenv("API_KEY_BYBIT"),
+        "api_secret": os.getenv("API_SECRET_BYBIT"),
+    },
+    "dextrade": {
+        "ccxt_id":    None,            # Not ccxt — uses custom DexTradeAdapter
+        "label":      "DEX",
+        "quote":      "USDT",
+        "fee_taker":  0.20,            # Dex-Trade taker fee
+        "gas":        0.00,
+        "enabled":    True,
+        "options":    {},
+        "api_key":    os.getenv("API_KEY_DEX"),
+        "api_secret": os.getenv("API_SECRET_DEX"),
+    },
+}
+
+# Derive enabled exchange list
+ENABLED_EXCHANGES = [name for name, cfg in EXCHANGES.items() if cfg["enabled"]]
+
+# All possible exchange pairs for spread comparison
+EXCHANGE_PAIRS = list(combinations(ENABLED_EXCHANGES, 2))
+
+# ── Token Configuration ─────────────────────────────────────────
+
 CATEGORIES = {
     "💎 Big Three":          ["SOL", "ETH", "BTC"],
     "🟣 Solana Core":        ["JUP", "PYTH", "JTO"],
@@ -38,84 +99,107 @@ CATEGORIES = {
     "🌐 Cross-Chain":        ["SUI", "SEI"],
 }
 
-# Flat list of all tokens (preserves category ordering)
 TOKENS = [t for group in CATEGORIES.values() for t in group]
 
-# Build token → category lookup for display
 TOKEN_CATEGORY = {}
 for cat, tokens in CATEGORIES.items():
     for t in tokens:
         TOKEN_CATEGORY[t] = cat
 
-# Binance uses USDT, Backpack uses USDC
-BINANCE_PAIRS  = {t: f"{t}/USDT" for t in TOKENS}
-BACKPACK_PAIRS = {t: f"{t}/USDC" for t in TOKENS}
+# ── General Settings ─────────────────────────────────────────────
 
-DEFAULT_THRESHOLD = 0.001    # % net profit to highlight (synced to frontend on connect)
+DEFAULT_THRESHOLD = 0.001    # % net profit to highlight (synced to frontend)
 WS_BROADCAST_INTERVAL = 0.1  # 100ms = 10fps
 
-# ── Fee / Cost Model ─────────────────────────────────────────────
-# All values in percentage (%). These represent the total round-trip
-# cost of executing an arbitrage trade.
-FEES = {
-    "binance_taker":    0.10,   # Binance spot taker fee
-    "backpack_taker":   0.10,   # Backpack spot taker fee
-    "solana_gas":       0.01,   # Solana network tx fee (~$0.01 per tx, estimated as % of ~$100 trade)
-    # Add withdrawal/deposit fees here if applicable
-}
-TOTAL_FEES_PCT = sum(FEES.values())  # e.g. 0.21%
+OPP_MIN_SPREAD   = 0.0
+OPP_LOG_FILE     = "logs/opportunities.csv"
 
-# Opportunity detection: any gross spread > 0% is a potential opportunity
-OPP_MIN_SPREAD    = 0.0
-OPP_LOG_FILE      = "logs/opportunities.csv"
-
-# CSV columns for opportunity log
+# CSV columns — now generic (exchange names instead of hard-coded)
 OPP_COLUMNS = [
     "timestamp_utc",
     "token",
+    "ex_buy",
+    "ex_sell",
     "direction",
     "gross_spread_pct",
     "net_spread_pct",
-    "binance_bid",
-    "binance_ask",
-    "backpack_bid",
-    "backpack_ask",
+    "pair_fees_pct",
+    "buy_ask",
+    "sell_bid",
     "usdt_usdc_rate",
-    "backpack_bid_depth_usd",
-    "binance_bid_depth_usd",
 ]
 
 
+# ── Helpers ──────────────────────────────────────────────────────
+
+def get_pair_fees(ex_a: str, ex_b: str) -> float:
+    """Total round-trip cost for a given exchange pair (buy on ex_a, sell on ex_b)."""
+    buy_fee  = EXCHANGES[ex_a]["fee_taker"]
+    sell_fee = EXCHANGES[ex_b]["fee_taker"]
+    gas      = max(EXCHANGES[ex_a]["gas"], EXCHANGES[ex_b]["gas"])
+    return buy_fee + sell_fee + gas
+
+
+def normalize_to_usdt(price: float, exchange_name: str, usdt_usdc_rate: float) -> float:
+    """Convert any quote currency price to USDT equivalent."""
+    quote = EXCHANGES[exchange_name]["quote"]
+    if quote == "USDT":
+        return price
+    elif quote == "USDC":
+        return price / usdt_usdc_rate if usdt_usdc_rate != 0 else price
+    return price
+
+
+def build_pair_symbol(token: str, exchange_name: str) -> str:
+    """Build the trading pair symbol for a given token on a given exchange."""
+    quote = EXCHANGES[exchange_name]["quote"]
+    if exchange_name == "dextrade":
+        return f"{token}{quote}"  # DexTrade format: "SOLUSDT" (no slash)
+    return f"{token}/{quote}"      # ccxt format: "SOL/USDT"
+
+
+# Pre-compute pair fees for all exchange combinations
+PAIR_FEES = {}
+for ex_a, ex_b in EXCHANGE_PAIRS:
+    # Fees are symmetric for our model (buy_fee + sell_fee + gas)
+    fee = get_pair_fees(ex_a, ex_b)
+    PAIR_FEES[(ex_a, ex_b)] = fee
+    PAIR_FEES[(ex_b, ex_a)] = fee
+
+
 # ── Shared state ─────────────────────────────────────────────────
+
 class LiveState:
-    """Shared state for all WebSocket feeds."""
+    """Shared state for all exchange feeds."""
 
     def __init__(self):
-        self.binance  = {}     # token -> {bid, ask, bid_depth, ask_depth, updated}
-        self.backpack = {}     # token -> {bid, ask, bid_depth, ask_depth, updated}
+        # Generic: {exchange_name: {token: {bid, ask, bid_depth, ask_depth, updated}}}
+        self.exchanges    = {ex: {} for ex in ENABLED_EXCHANGES}
+        self.ws_status    = {ex: {} for ex in ENABLED_EXCHANGES}
+        self.update_count = {ex: 0  for ex in ENABLED_EXCHANGES}
+
         self.usdt_usdc_rate = 1.0
-        self.ws_status = {
-            "binance":  {},    # token -> "connected" | "error:..."
-            "backpack": {},    # token -> "connected" | "error:..."
-        }
-        self.update_count = {"binance": 0, "backpack": 0}
         self.errors = []
         self.started_at = time.monotonic()
 
-        # ── Opportunity tracking ─────────────────────────────────
+        # Per-exchange: which tokens are available on that exchange
+        self.supported_tokens = {ex: set(TOKENS) for ex in ENABLED_EXCHANGES}
+
+        # Opportunity tracking
         self.opp_count     = {t: 0 for t in TOKENS}
         self.opp_total     = 0
         self.opp_last      = {}   # token -> last opp dict
-        self.opp_best      = {}   # token -> best spread ever
+        self.opp_best      = {}   # token -> best net spread ever
 
-        # ── Spread tracking (for session highs) ──────────────────
-        self.spread_history = {t: {"max_buy_bin": -999, "max_buy_bp": -999} for t in TOKENS}
+        # Spread tracking (session highs) — keyed by token
+        self.spread_history = {t: {"max_net": -999} for t in TOKENS}
 
 
 state = LiveState()
 
 
 # ── Opportunity Logger ───────────────────────────────────────────
+
 class OpportunityLogger:
     """Logs every detected opportunity to CSV."""
 
@@ -144,7 +228,7 @@ opp_logger = OpportunityLogger(OPP_LOG_FILE)
 # ── Orderbook parser ────────────────────────────────────────────
 
 def parse_orderbook(ob: dict) -> dict:
-    """Extract best bid/ask and depth from orderbook."""
+    """Extract best bid/ask and depth from a ccxt orderbook."""
     bids = ob.get("bids", [])
     asks = ob.get("asks", [])
     best_bid = float(bids[0][0]) if bids else None
@@ -160,33 +244,42 @@ def parse_orderbook(ob: dict) -> dict:
     }
 
 
-# ── WebSocket feed tasks ────────────────────────────────────────
+# ── Generic WebSocket feed task (for ccxt.pro exchanges) ────────
 
-async def watch_binance_book(exchange, token: str, symbol: str):
-    """Subscribe to one Binance orderbook via WebSocket."""
+async def watch_orderbook(exchange_obj, exchange_name: str, token: str, symbol: str):
+    """Generic WebSocket orderbook watcher for any ccxt.pro exchange."""
     while True:
         try:
-            ob = await exchange.watch_order_book(symbol, limit=10)
-            state.binance[token] = parse_orderbook(ob)
-            state.ws_status["binance"][token] = "connected"
-            state.update_count["binance"] += 1
+            ob = await exchange_obj.watch_order_book(symbol, limit=10)
+            state.exchanges[exchange_name][token] = parse_orderbook(ob)
+            state.ws_status[exchange_name][token] = "connected"
+            state.update_count[exchange_name] += 1
         except Exception as e:
-            state.ws_status["binance"][token] = f"error:{str(e)[:30]}"
+            err_msg = str(e)[:30]
+            state.ws_status[exchange_name][token] = f"error:{err_msg}"
             await asyncio.sleep(2)
 
 
-async def watch_backpack_book(exchange, token: str, symbol: str):
-    """Subscribe to one Backpack orderbook via WebSocket."""
+# ── Dex-Trade REST polling feed task ─────────────────────────────
+
+async def watch_dextrade_book(adapter: DexTradeAdapter, token: str, pair: str):
+    """Poll Dex-Trade REST API for one token's orderbook. Rate-limited."""
     while True:
         try:
-            ob = await exchange.watch_order_book(symbol, limit=10)
-            state.backpack[token] = parse_orderbook(ob)
-            state.ws_status["backpack"][token] = "connected"
-            state.update_count["backpack"] += 1
+            ob = await adapter.fetch_orderbook(pair)
+            if ob and ob["bid"] is not None:
+                state.exchanges["dextrade"][token] = ob
+                state.ws_status["dextrade"][token] = "connected"
+                state.update_count["dextrade"] += 1
+            else:
+                state.ws_status["dextrade"][token] = "error:no_data"
         except Exception as e:
-            state.ws_status["backpack"][token] = f"error:{str(e)[:30]}"
-            await asyncio.sleep(2)
+            state.ws_status["dextrade"][token] = f"error:{str(e)[:30]}"
+        # Rate limit: stagger polling (10 req/sec shared across all tokens)
+        await asyncio.sleep(max(0.5, len(state.supported_tokens.get("dextrade", [])) / 10.0))
 
+
+# ── USDT/USDC rate tracker ──────────────────────────────────────
 
 async def watch_usdt_usdc(exchange):
     """Track USDT/USDC rate via WebSocket ticker."""
@@ -209,100 +302,103 @@ async def watch_usdt_usdc(exchange):
 
 async def opportunity_detector():
     """
-    Runs alongside WebSocket feeds. Checks for positive spreads
-    and logs ALL to CSV (for data analysis), but only counts/tracks
-    opportunities where net_spread >= threshold.
-    Runs at ~20 checks/sec to catch fleeting opportunities.
+    Runs alongside feeds. Checks ALL exchange pairs for profitable spreads.
+    Only counts/logs opportunities where net_spread >= threshold.
+    Runs at ~20 checks/sec.
     """
-    COMBINED_FEE_PCT = TOTAL_FEES_PCT  # exchange fees + gas (see FEES dict)
-
     await asyncio.sleep(5)  # let feeds warm up
 
-    # Debounce: don't log the same token twice within 1 second
-    last_logged = {t: 0.0 for t in TOKENS}
+    # Debounce: don't log the same token+pair twice within 1 second
+    last_logged = {}  # (token, ex_a, ex_b) -> monotonic time
 
     while True:
         usdt_usdc = state.usdt_usdc_rate
 
-        for token in TOKENS:
-            bd = state.binance.get(token, {})
-            pd = state.backpack.get(token, {})
+        for ex_a, ex_b in EXCHANGE_PAIRS:
+            pair_fees = PAIR_FEES[(ex_a, ex_b)]
 
-            b_bid = bd.get("bid")
-            b_ask = bd.get("ask")
-            p_bid = pd.get("bid")
-            p_ask = pd.get("ask")
+            for token in TOKENS:
+                ob_a = state.exchanges[ex_a].get(token, {})
+                ob_b = state.exchanges[ex_b].get(token, {})
 
-            if not all([b_bid, b_ask, p_bid, p_ask]):
-                continue
+                a_bid = ob_a.get("bid")
+                a_ask = ob_a.get("ask")
+                b_bid = ob_b.get("bid")
+                b_ask = ob_b.get("ask")
 
-            # Convert Backpack USDC to USDT-equivalent
-            p_bid_usdt = p_bid / usdt_usdc
-            p_ask_usdt = p_ask / usdt_usdc
-
-            # Both directions
-            spread_buy_bin = ((p_bid_usdt - b_ask) / b_ask) * 100
-            spread_buy_bp  = ((b_bid - p_ask_usdt) / p_ask_usdt) * 100
-
-            # Update spread history for session highs
-            if spread_buy_bin > state.spread_history[token]["max_buy_bin"]:
-                state.spread_history[token]["max_buy_bin"] = spread_buy_bin
-            if spread_buy_bp > state.spread_history[token]["max_buy_bp"]:
-                state.spread_history[token]["max_buy_bp"] = spread_buy_bp
-
-            # Check each direction
-            for spread, direction in [
-                (spread_buy_bin, "BuyBIN\u2192SellBP"),
-                (spread_buy_bp,  "BuyBP\u2192SellBIN"),
-            ]:
-                if spread <= OPP_MIN_SPREAD:
+                if not all([a_bid, a_ask, b_bid, b_ask]):
                     continue
 
-                now = time.monotonic()
-                # Debounce: 1 second between logs for the same token
-                if now - last_logged[token] < 1.0:
-                    continue
+                # Normalize all prices to USDT
+                a_bid_u = normalize_to_usdt(a_bid, ex_a, usdt_usdc)
+                a_ask_u = normalize_to_usdt(a_ask, ex_a, usdt_usdc)
+                b_bid_u = normalize_to_usdt(b_bid, ex_b, usdt_usdc)
+                b_ask_u = normalize_to_usdt(b_ask, ex_b, usdt_usdc)
 
-                last_logged[token] = now
-                net_spread = spread - COMBINED_FEE_PCT
+                # Direction 1: Buy on ex_a, sell on ex_b
+                spread_a_to_b = ((b_bid_u - a_ask_u) / a_ask_u) * 100
+                # Direction 2: Buy on ex_b, sell on ex_a
+                spread_b_to_a = ((a_bid_u - b_ask_u) / b_ask_u) * 100
 
-                # Only count/log as an "opportunity" if net profit meets threshold
-                if net_spread < threshold_config["value"]:
-                    continue
+                label_a = EXCHANGES[ex_a]["label"]
+                label_b = EXCHANGES[ex_b]["label"]
 
-                # Update counters (threshold-qualified only)
-                state.opp_count[token] += 1
-                state.opp_total += 1
+                for spread, direction, buy_ex, sell_ex, buy_ask, sell_bid in [
+                    (spread_a_to_b, f"Buy{label_a}→Sell{label_b}", ex_a, ex_b, a_ask, b_bid),
+                    (spread_b_to_a, f"Buy{label_b}→Sell{label_a}", ex_b, ex_a, b_ask, a_bid),
+                ]:
+                    if spread <= OPP_MIN_SPREAD:
+                        continue
 
-                # Track best
-                prev_best = state.opp_best.get(token, -999)
-                if net_spread > prev_best:
-                    state.opp_best[token] = net_spread
+                    now = time.monotonic()
+                    debounce_key = (token, buy_ex, sell_ex)
+                    if now - last_logged.get(debounce_key, 0) < 1.0:
+                        continue
 
-                # Store last opportunity info
-                state.opp_last[token] = {
-                    "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-                    "spread": round(spread, 4),
-                    "net": round(net_spread, 4),
-                    "direction": direction,
-                }
+                    last_logged[debounce_key] = now
+                    net_spread = spread - pair_fees
 
-                # Log to CSV (threshold-qualified only)
-                record = {
-                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                    "token": token,
-                    "direction": direction,
-                    "gross_spread_pct": round(spread, 4),
-                    "net_spread_pct": round(net_spread, 4),
-                    "binance_bid": b_bid,
-                    "binance_ask": b_ask,
-                    "backpack_bid": p_bid,
-                    "backpack_ask": p_ask,
-                    "usdt_usdc_rate": usdt_usdc,
-                    "backpack_bid_depth_usd": round(pd.get("bid_depth", 0), 2),
-                    "binance_bid_depth_usd": round(bd.get("bid_depth", 0), 2),
-                }
-                await opp_logger.log(record)
+                    # Only count/log if net meets threshold
+                    if net_spread < threshold_config["value"]:
+                        continue
+
+                    # Update counters
+                    state.opp_count[token] += 1
+                    state.opp_total += 1
+
+                    # Track best (net)
+                    prev_best = state.opp_best.get(token, -999)
+                    if net_spread > prev_best:
+                        state.opp_best[token] = net_spread
+
+                    # Update session high
+                    if net_spread > state.spread_history[token]["max_net"]:
+                        state.spread_history[token]["max_net"] = net_spread
+
+                    # Store last opportunity info
+                    state.opp_last[token] = {
+                        "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                        "spread": round(spread, 4),
+                        "net": round(net_spread, 4),
+                        "direction": direction,
+                        "pair": f"{buy_ex}→{sell_ex}",
+                    }
+
+                    # Log to CSV
+                    record = {
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "token": token,
+                        "ex_buy": buy_ex,
+                        "ex_sell": sell_ex,
+                        "direction": direction,
+                        "gross_spread_pct": round(spread, 4),
+                        "net_spread_pct": round(net_spread, 4),
+                        "pair_fees_pct": round(pair_fees, 4),
+                        "buy_ask": buy_ask,
+                        "sell_bid": sell_bid,
+                        "usdt_usdc_rate": usdt_usdc,
+                    }
+                    await opp_logger.log(record)
 
         await asyncio.sleep(0.05)  # 20 checks/second
 
@@ -311,16 +407,12 @@ async def opportunity_detector():
 
 connected_clients: set = set()
 
-# Shared mutable threshold — updated by frontend via WS, read by all coroutines
+# Shared mutable threshold — updated by frontend via WS
 threshold_config = {"value": DEFAULT_THRESHOLD}
 
 
 async def ws_handler(websocket):
-    """Handle a new WebSocket client connection.
-    
-    Bidirectional: broadcasts state to client, and listens for
-    incoming messages (e.g. threshold updates from the frontend slider).
-    """
+    """Bidirectional WS handler — broadcasts state, receives threshold updates."""
     connected_clients.add(websocket)
     remote = websocket.remote_address
     print(f"[ws_server] Client connected: {remote}  ({len(connected_clients)} total)")
@@ -334,9 +426,9 @@ async def ws_handler(websocket):
                     old_val = threshold_config["value"]
                     threshold_config["value"] = new_val
                     if abs(new_val - old_val) > 0.0001:
-                        print(f"[ws_server] Threshold updated: {old_val}% \u2192 {new_val}% (by {remote})")
+                        print(f"[ws_server] Threshold updated: {old_val}% → {new_val}% (by {remote})")
             except (json.JSONDecodeError, ValueError, TypeError):
-                pass  # ignore malformed messages
+                pass
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
@@ -345,92 +437,145 @@ async def ws_handler(websocket):
 
 
 def serialize_state(threshold: float) -> dict:
-    """Convert the global LiveState into a JSON-serializable dictionary.
-
-    This is the single payload shape that the React frontend consumes.
-    Computed spreads are calculated here so the frontend doesn't need
-    to know about USDT/USDC conversion math.
-    """
+    """Convert global LiveState into JSON-serializable payload for the frontend."""
     now_mono = time.monotonic()
     usdt_usdc = state.usdt_usdc_rate
     uptime = int(now_mono - state.started_at)
 
-    # Build per-token orderbook + computed spread data
+    # Build per-token data
     token_data = {}
     for token in TOKENS:
-        bd = state.binance.get(token, {})
-        pd = state.backpack.get(token, {})
+        # Collect exchange data for this token
+        exchanges_data = {}
+        for ex in ENABLED_EXCHANGES:
+            ob = state.exchanges[ex].get(token, {})
+            exchanges_data[ex] = {
+                "bid": ob.get("bid"),
+                "ask": ob.get("ask"),
+                "bid_depth": round(ob.get("bid_depth", 0), 2),
+                "ask_depth": round(ob.get("ask_depth", 0), 2),
+                "age_ms": int((now_mono - ob["updated"]) * 1000) if ob.get("updated") else None,
+                "status": state.ws_status[ex].get(token, "disconnected"),
+            }
 
-        b_bid = bd.get("bid")
-        b_ask = bd.get("ask")
-        p_bid = pd.get("bid")
-        p_ask = pd.get("ask")
+        # Compute spreads for ALL exchange pairs
+        spread_pairs = []
+        for ex_a, ex_b in EXCHANGE_PAIRS:
+            ob_a = state.exchanges[ex_a].get(token, {})
+            ob_b = state.exchanges[ex_b].get(token, {})
 
-        # Compute spreads if we have all prices
-        spread_buy_bin = None
-        spread_buy_bp = None
-        net_buy_bin = None
-        net_buy_bp = None
-        if all([b_bid, b_ask, p_bid, p_ask]):
-            p_bid_usdt = p_bid / usdt_usdc
-            p_ask_usdt = p_ask / usdt_usdc
-            spread_buy_bin = round(((p_bid_usdt - b_ask) / b_ask) * 100, 4)
-            spread_buy_bp  = round(((b_bid - p_ask_usdt) / p_ask_usdt) * 100, 4)
-            net_buy_bin = round(spread_buy_bin - TOTAL_FEES_PCT, 4)
-            net_buy_bp  = round(spread_buy_bp - TOTAL_FEES_PCT, 4)
+            a_bid = ob_a.get("bid")
+            a_ask = ob_a.get("ask")
+            b_bid = ob_b.get("bid")
+            b_ask = ob_b.get("ask")
 
-        # Session highs (using net spread for meaningful comparison)
-        sh = state.spread_history[token]
-        session_high_gross = max(sh["max_buy_bin"], sh["max_buy_bp"])
-        session_high_net = round(session_high_gross - TOTAL_FEES_PCT, 4) if session_high_gross > -999 else None
-        if session_high_gross <= -999:
-            session_high_gross = None
+            pair_fees = PAIR_FEES[(ex_a, ex_b)]
+
+            if all([a_bid, a_ask, b_bid, b_ask]):
+                a_bid_u = normalize_to_usdt(a_bid, ex_a, usdt_usdc)
+                a_ask_u = normalize_to_usdt(a_ask, ex_a, usdt_usdc)
+                b_bid_u = normalize_to_usdt(b_bid, ex_b, usdt_usdc)
+                b_ask_u = normalize_to_usdt(b_ask, ex_b, usdt_usdc)
+
+                label_a = EXCHANGES[ex_a]["label"]
+                label_b = EXCHANGES[ex_b]["label"]
+
+                # Direction: buy on ex_a, sell on ex_b
+                gross_a2b = round(((b_bid_u - a_ask_u) / a_ask_u) * 100, 4)
+                net_a2b = round(gross_a2b - pair_fees, 4)
+
+                # Direction: buy on ex_b, sell on ex_a
+                gross_b2a = round(((a_bid_u - b_ask_u) / b_ask_u) * 100, 4)
+                net_b2a = round(gross_b2a - pair_fees, 4)
+
+                spread_pairs.append({
+                    "ex_buy": ex_a, "ex_sell": ex_b,
+                    "label": f"{label_a}→{label_b}",
+                    "gross": gross_a2b, "net": net_a2b,
+                    "fees": pair_fees,
+                })
+                spread_pairs.append({
+                    "ex_buy": ex_b, "ex_sell": ex_a,
+                    "label": f"{label_b}→{label_a}",
+                    "gross": gross_b2a, "net": net_b2a,
+                    "fees": pair_fees,
+                })
+            else:
+                label_a = EXCHANGES[ex_a]["label"]
+                label_b = EXCHANGES[ex_b]["label"]
+                spread_pairs.append({
+                    "ex_buy": ex_a, "ex_sell": ex_b,
+                    "label": f"{label_a}→{label_b}",
+                    "gross": None, "net": None,
+                    "fees": pair_fees,
+                })
+                spread_pairs.append({
+                    "ex_buy": ex_b, "ex_sell": ex_a,
+                    "label": f"{label_b}→{label_a}",
+                    "gross": None, "net": None,
+                    "fees": pair_fees,
+                })
+
+        # Find best net spread across all pairs
+        valid_nets = [sp["net"] for sp in spread_pairs if sp["net"] is not None]
+        best_net = max(valid_nets) if valid_nets else None
+        best_pair_entry = None
+        if best_net is not None:
+            best_pair_entry = next(
+                (sp for sp in spread_pairs if sp["net"] == best_net), None
+            )
+
+        # Session high
+        sh_net = state.spread_history[token]["max_net"]
+        session_high_net = round(sh_net, 4) if sh_net > -999 else None
 
         token_data[token] = {
             "category": TOKEN_CATEGORY[token],
-            "binance": {
-                "bid": b_bid,
-                "ask": b_ask,
-                "bid_depth": round(bd.get("bid_depth", 0), 2),
-                "ask_depth": round(bd.get("ask_depth", 0), 2),
-                "age_ms": int((now_mono - bd["updated"]) * 1000) if bd.get("updated") else None,
-                "status": state.ws_status["binance"].get(token, "disconnected"),
-            },
-            "backpack": {
-                "bid": p_bid,
-                "ask": p_ask,
-                "bid_depth": round(pd.get("bid_depth", 0), 2),
-                "ask_depth": round(pd.get("ask_depth", 0), 2),
-                "age_ms": int((now_mono - pd["updated"]) * 1000) if pd.get("updated") else None,
-                "status": state.ws_status["backpack"].get(token, "disconnected"),
-            },
-            "spread_buy_bin": spread_buy_bin,       # Gross: Buy on Binance → Sell on Backpack
-            "spread_buy_bp": spread_buy_bp,         # Gross: Buy on Backpack → Sell on Binance
-            "net_spread_buy_bin": net_buy_bin,       # Net: gross - total_fees
-            "net_spread_buy_bp": net_buy_bp,         # Net: gross - total_fees
-            "session_high_gross": session_high_gross,
+            "exchanges": exchanges_data,
+            "spread_pairs": spread_pairs,
+            "best_net": round(best_net, 4) if best_net is not None else None,
+            "best_net_label": best_pair_entry["label"] if best_pair_entry else None,
+            "best_gross": round(best_pair_entry["gross"], 4) if best_pair_entry and best_pair_entry["gross"] is not None else None,
+            "best_fees": round(best_pair_entry["fees"], 4) if best_pair_entry else None,
             "session_high_net": session_high_net,
             "opp_count": state.opp_count.get(token, 0),
             "opp_best": round(state.opp_best[token], 4) if token in state.opp_best else None,
             "opp_last": state.opp_last.get(token),
         }
 
-    # Connection summaries
-    bin_connected = sum(1 for s in state.ws_status["binance"].values() if s == "connected")
-    bp_connected  = sum(1 for s in state.ws_status["backpack"].values() if s == "connected")
+    # Exchange connectivity summaries
+    exchange_meta = {}
+    for ex in ENABLED_EXCHANGES:
+        connected = sum(1 for s in state.ws_status[ex].values() if s == "connected")
+        total = len(state.supported_tokens.get(ex, []))
+        exchange_meta[ex] = {
+            "label": EXCHANGES[ex]["label"],
+            "quote": EXCHANGES[ex]["quote"],
+            "connected": connected,
+            "total": total,
+        }
+
+    # Fee model — per-pair fees
+    pair_fees_map = {}
+    for (a, b), fee in PAIR_FEES.items():
+        key = f"{a}_{b}"
+        if key not in pair_fees_map:
+            pair_fees_map[key] = {
+                "ex_a": a, "ex_b": b,
+                "label": f"{EXCHANGES[a]['label']}↔{EXCHANGES[b]['label']}",
+                "total": round(fee, 4),
+            }
 
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "uptime_seconds": uptime,
         "threshold": threshold,
 
-        # Fee model (so frontend can display the cost breakdown)
-        "fees": FEES,
-        "total_fees_pct": TOTAL_FEES_PCT,
+        # Exchange info
+        "exchanges_list": ENABLED_EXCHANGES,
+        "exchange_meta": exchange_meta,
+        "pair_fees": pair_fees_map,
 
-        # Exchange connectivity
-        "binance_connected": bin_connected,
-        "backpack_connected": bp_connected,
         "total_tokens": len(TOKENS),
         "update_count": state.update_count.copy(),
 
@@ -440,18 +585,17 @@ def serialize_state(threshold: float) -> dict:
         # Opportunity summary
         "opp_total": state.opp_total,
 
-        # Structure metadata (for frontend grouping)
+        # Structure metadata
         "categories": CATEGORIES,
         "tokens": TOKENS,
 
-        # Per-token data (the main payload)
+        # Per-token data
         "token_data": token_data,
     }
 
 
 async def broadcast_state():
     """Broadcast full LiveState JSON to all connected WebSocket clients at 10fps."""
-    # Wait for feeds to warm up before broadcasting
     await asyncio.sleep(3)
 
     while True:
@@ -467,41 +611,105 @@ async def broadcast_state():
 # ── Main orchestrator ────────────────────────────────────────────
 
 async def main(threshold: float, port: int = 8765):
-    """Start all WebSocket feeds, opportunity detector, and broadcast loop."""
-    # Set shared threshold from CLI arg
+    """Start all exchange feeds, opportunity detector, and broadcast loop."""
     threshold_config["value"] = threshold
 
-    binance  = ccxt.binance({"options": {"defaultType": "spot"}})
-    backpack = ccxt.backpack()
+    tasks = []
+    exchange_objects = {}   # name -> ccxt exchange or adapter instance
 
-    # Start WebSocket broadcast server
+    # ── Initialize ccxt.pro exchanges ──────────────────────────
+    for ex_name in ENABLED_EXCHANGES:
+        cfg = EXCHANGES[ex_name]
+        if cfg["ccxt_id"] is None:
+            continue  # handled separately (e.g. dextrade)
+
+        ccxt_class = getattr(ccxt, cfg["ccxt_id"])
+        ccxt_config = {
+            "options": cfg.get("options", {}),
+        }
+        if cfg.get("api_key"):
+            ccxt_config["apiKey"] = cfg["api_key"]
+        if cfg.get("api_secret"):
+            ccxt_config["secret"] = cfg["api_secret"]
+
+        exchange_obj = ccxt_class(ccxt_config)
+        exchange_objects[ex_name] = exchange_obj
+
+        # Load markets to check which tokens are available
+        try:
+            await exchange_obj.load_markets()
+            available = set()
+            for token in TOKENS:
+                symbol = build_pair_symbol(token, ex_name)
+                if symbol in exchange_obj.markets:
+                    available.add(token)
+            state.supported_tokens[ex_name] = available
+            print(f"[ws_server] {ex_name}: {len(available)}/{len(TOKENS)} tokens available")
+        except Exception as e:
+            print(f"[ws_server] {ex_name}: failed to load markets: {e}")
+            state.supported_tokens[ex_name] = set(TOKENS)  # assume all available
+
+    # ── Initialize Dex-Trade adapter ───────────────────────────
+    dextrade_adapter = None
+    if "dextrade" in ENABLED_EXCHANGES:
+        cfg = EXCHANGES["dextrade"]
+        dextrade_adapter = DexTradeAdapter(
+            api_key=cfg.get("api_key"),
+            api_secret=cfg.get("api_secret"),
+        )
+        exchange_objects["dextrade"] = dextrade_adapter
+
+        # Load available markets
+        available_pairs = await dextrade_adapter.load_markets()
+        available_tokens = set()
+        for token in TOKENS:
+            pair = build_pair_symbol(token, "dextrade")
+            if dextrade_adapter.has_pair(pair):
+                available_tokens.add(token)
+        state.supported_tokens["dextrade"] = available_tokens
+        print(f"[ws_server] dextrade: {len(available_tokens)}/{len(TOKENS)} tokens available")
+
+    # ── Start WebSocket broadcast server ───────────────────────
     server = await websockets.serve(ws_handler, "127.0.0.1", port)
     print(f"[ws_server] ⚡ WebSocket server running on ws://127.0.0.1:{port}")
-    print(f"[ws_server] Subscribing to {len(TOKENS)} orderbooks on Binance + Backpack...")
+    print(f"[ws_server] Subscribing to orderbooks on {', '.join(ENABLED_EXCHANGES)}...")
+    print(f"[ws_server] Exchange pairs: {len(EXCHANGE_PAIRS)} ({', '.join(f'{a}↔{b}' for a, b in EXCHANGE_PAIRS)})")
     print(f"[ws_server] Threshold: {threshold}%  |  Broadcast: {int(1/WS_BROADCAST_INTERVAL)}fps")
     print(f"[ws_server] Opportunity log: {OPP_LOG_FILE}")
 
-    tasks = []
+    # ── Launch orderbook feeds ─────────────────────────────────
+    for ex_name in ENABLED_EXCHANGES:
+        cfg = EXCHANGES[ex_name]
+        supported = state.supported_tokens.get(ex_name, set())
 
-    # Binance WebSocket feeds
-    for token in TOKENS:
-        tasks.append(asyncio.create_task(
-            watch_binance_book(binance, token, BINANCE_PAIRS[token])
-        ))
+        if ex_name == "dextrade" and dextrade_adapter:
+            # REST polling for Dex-Trade
+            for token in TOKENS:
+                if token not in supported:
+                    continue
+                pair = build_pair_symbol(token, "dextrade")
+                tasks.append(asyncio.create_task(
+                    watch_dextrade_book(dextrade_adapter, token, pair)
+                ))
+        elif cfg["ccxt_id"] is not None:
+            # ccxt.pro WebSocket feed
+            exchange_obj = exchange_objects[ex_name]
+            for token in TOKENS:
+                if token not in supported:
+                    continue
+                symbol = build_pair_symbol(token, ex_name)
+                tasks.append(asyncio.create_task(
+                    watch_orderbook(exchange_obj, ex_name, token, symbol)
+                ))
 
-    # Backpack WebSocket feeds
-    for token in TOKENS:
-        tasks.append(asyncio.create_task(
-            watch_backpack_book(backpack, token, BACKPACK_PAIRS[token])
-        ))
+    # ── USDT/USDC rate tracker (use Binance) ───────────────────
+    if "binance" in exchange_objects:
+        tasks.append(asyncio.create_task(watch_usdt_usdc(exchange_objects["binance"])))
 
-    # USDT/USDC rate tracker
-    tasks.append(asyncio.create_task(watch_usdt_usdc(binance)))
-
-    # Opportunity detector (runs 20x/sec, reads threshold_config)
+    # ── Opportunity detector ───────────────────────────────────
     tasks.append(asyncio.create_task(opportunity_detector()))
 
-    # WebSocket broadcast loop (10fps)
+    # ── Broadcast loop ─────────────────────────────────────────
     tasks.append(asyncio.create_task(broadcast_state()))
 
     try:
@@ -513,8 +721,13 @@ async def main(threshold: float, port: int = 8765):
         server.close()
         for task in tasks:
             task.cancel()
-        await binance.close()
-        await backpack.close()
+
+        # Close all exchange connections
+        for name, obj in exchange_objects.items():
+            try:
+                await obj.close()
+            except Exception:
+                pass
 
         # Print session summary
         uptime = int(time.monotonic() - state.started_at)
@@ -522,12 +735,13 @@ async def main(threshold: float, port: int = 8765):
         print(f"  SESSION SUMMARY")
         print(f"{'─' * 60}")
         print(f"  Uptime         : {uptime // 3600}h{(uptime % 3600) // 60:02d}m{uptime % 60:02d}s")
+        print(f"  Exchanges      : {', '.join(ENABLED_EXCHANGES)}")
         print(f"  Total opps     : {state.opp_total}")
         for t in TOKENS:
             c = state.opp_count.get(t, 0)
             b = state.opp_best.get(t, 0)
             if c > 0:
-                print(f"    {t:<8}: {c:>4} opps  |  best: {b:+.3f}%")
+                print(f"    {t:<8}: {c:>4} opps  |  best net: {b:+.3f}%")
         print(f"  Log file       : {OPP_LOG_FILE}")
         print(f"{'═' * 60}")
         print(f"Server stopped cleanly.")

@@ -38,8 +38,8 @@ class Executor:
                 "options": {"defaultType": "spot"},
             })
             self._mexc = ccxt.mexc({
-                "apiKey": cfg.API_KEY_MEXC,
-                "secret": cfg.API_SECRET_MEXC,
+                "apiKey": cfg.API_KEY_BACKPACK,
+                "secret": cfg.API_SECRET_BACKPACK,
             })
             log.info("executor_mode", mode="LIVE — real money")
 
