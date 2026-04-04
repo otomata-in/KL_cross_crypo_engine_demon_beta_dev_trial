@@ -51,7 +51,7 @@ for cat, tokens in CATEGORIES.items():
 BINANCE_PAIRS  = {t: f"{t}/USDT" for t in TOKENS}
 BACKPACK_PAIRS = {t: f"{t}/USDC" for t in TOKENS}
 
-DEFAULT_THRESHOLD = 15.0    # % net profit to highlight (synced to frontend on connect)
+DEFAULT_THRESHOLD = 0.001    # % net profit to highlight (synced to frontend on connect)
 WS_BROADCAST_INTERVAL = 0.1  # 100ms = 10fps
 
 # ── Fee / Cost Model ─────────────────────────────────────────────
@@ -330,11 +330,11 @@ async def ws_handler(websocket):
                 msg = json.loads(message)
                 if msg.get("type") == "set_threshold":
                     new_val = float(msg.get("value", threshold_config["value"]))
-                    new_val = max(0.1, min(15.0, new_val))
+                    new_val = max(-2.0, min(15.0, new_val))
                     old_val = threshold_config["value"]
                     threshold_config["value"] = new_val
-                    if abs(new_val - old_val) > 0.01:
-                        print(f"[ws_server] Threshold updated: {old_val}% → {new_val}% (by {remote})")
+                    if abs(new_val - old_val) > 0.0001:
+                        print(f"[ws_server] Threshold updated: {old_val}% \u2192 {new_val}% (by {remote})")
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass  # ignore malformed messages
     except websockets.exceptions.ConnectionClosed:

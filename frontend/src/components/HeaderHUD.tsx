@@ -74,9 +74,9 @@ export const HeaderHUD: React.FC = () => {
             <span className="text-xs text-gray-400">Min Net Profit</span>
             <input
               type="range"
-              min="0.1"
+              min="-2.0"
               max="15"
-              step="0.1"
+              step="0.001"
               value={threshold}
               onChange={(e) => setThreshold(parseFloat(e.target.value))}
               className="w-24 h-1.5 appearance-none bg-border rounded-full cursor-pointer
@@ -88,12 +88,12 @@ export const HeaderHUD: React.FC = () => {
             />
             <input
               type="number"
-              min="0.1"
+              min="-2.0"
               max="15"
-              step="0.1"
+              step="0.001"
               value={threshold}
-              onChange={(e) => setThreshold(parseFloat(e.target.value) || 0.1)}
-              className="w-14 text-xs font-mono font-bold text-accent-light bg-surface border border-border rounded px-1.5 py-0.5 text-center
+              onChange={(e) => setThreshold(parseFloat(e.target.value) || 0.001)}
+              className="w-16 text-xs font-mono font-bold text-accent-light bg-surface border border-border rounded px-1.5 py-0.5 text-center
                 focus:outline-none focus:border-accent/50"
             />
             <span className="text-[10px] text-gray-600">%</span>

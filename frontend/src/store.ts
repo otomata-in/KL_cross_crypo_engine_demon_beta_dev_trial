@@ -45,5 +45,5 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
     set({ wsStatus }),
 
   setThreshold: (threshold) =>
-    set({ threshold: Math.max(0.1, Math.min(15, threshold)), _thresholdInitialized: true }),
+    set({ threshold: Math.max(-2.0, Math.min(15, threshold)), _thresholdInitialized: true }),
 }));
