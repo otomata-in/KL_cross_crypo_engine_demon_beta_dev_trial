@@ -51,7 +51,7 @@ for cat, tokens in CATEGORIES.items():
 BINANCE_PAIRS  = {t: f"{t}/USDT" for t in TOKENS}
 BACKPACK_PAIRS = {t: f"{t}/USDC" for t in TOKENS}
 
-DEFAULT_THRESHOLD = 1.0    # % net profit to highlight (synced to frontend on connect)
+DEFAULT_THRESHOLD = 15.0    # % net profit to highlight (synced to frontend on connect)
 WS_BROADCAST_INTERVAL = 0.1  # 100ms = 10fps
 
 # ── Fee / Cost Model ─────────────────────────────────────────────
@@ -210,7 +210,8 @@ async def watch_usdt_usdc(exchange):
 async def opportunity_detector():
     """
     Runs alongside WebSocket feeds. Checks for positive spreads
-    and logs them to CSV + updates counters.
+    and logs ALL to CSV (for data analysis), but only counts/tracks
+    opportunities where net_spread >= threshold.
     Runs at ~20 checks/sec to catch fleeting opportunities.
     """
     COMBINED_FEE_PCT = TOTAL_FEES_PCT  # exchange fees + gas (see FEES dict)
@@ -251,8 +252,8 @@ async def opportunity_detector():
 
             # Check each direction
             for spread, direction in [
-                (spread_buy_bin, "BuyBIN→SellBP"),
-                (spread_buy_bp,  "BuyBP→SellBIN"),
+                (spread_buy_bin, "BuyBIN\u2192SellBP"),
+                (spread_buy_bp,  "BuyBP\u2192SellBIN"),
             ]:
                 if spread <= OPP_MIN_SPREAD:
                     continue
@@ -265,14 +266,18 @@ async def opportunity_detector():
                 last_logged[token] = now
                 net_spread = spread - COMBINED_FEE_PCT
 
-                # Update counters
+                # Only count/log as an "opportunity" if net profit meets threshold
+                if net_spread < threshold_config["value"]:
+                    continue
+
+                # Update counters (threshold-qualified only)
                 state.opp_count[token] += 1
                 state.opp_total += 1
 
                 # Track best
                 prev_best = state.opp_best.get(token, -999)
-                if spread > prev_best:
-                    state.opp_best[token] = spread
+                if net_spread > prev_best:
+                    state.opp_best[token] = net_spread
 
                 # Store last opportunity info
                 state.opp_last[token] = {
@@ -282,7 +287,7 @@ async def opportunity_detector():
                     "direction": direction,
                 }
 
-                # Log to CSV
+                # Log to CSV (threshold-qualified only)
                 record = {
                     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                     "token": token,
@@ -306,14 +311,34 @@ async def opportunity_detector():
 
 connected_clients: set = set()
 
+# Shared mutable threshold — updated by frontend via WS, read by all coroutines
+threshold_config = {"value": DEFAULT_THRESHOLD}
+
 
 async def ws_handler(websocket):
-    """Handle a new WebSocket client connection."""
+    """Handle a new WebSocket client connection.
+    
+    Bidirectional: broadcasts state to client, and listens for
+    incoming messages (e.g. threshold updates from the frontend slider).
+    """
     connected_clients.add(websocket)
     remote = websocket.remote_address
     print(f"[ws_server] Client connected: {remote}  ({len(connected_clients)} total)")
     try:
-        await websocket.wait_closed()
+        async for message in websocket:
+            try:
+                msg = json.loads(message)
+                if msg.get("type") == "set_threshold":
+                    new_val = float(msg.get("value", threshold_config["value"]))
+                    new_val = max(0.1, min(15.0, new_val))
+                    old_val = threshold_config["value"]
+                    threshold_config["value"] = new_val
+                    if abs(new_val - old_val) > 0.01:
+                        print(f"[ws_server] Threshold updated: {old_val}% → {new_val}% (by {remote})")
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass  # ignore malformed messages
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
         connected_clients.discard(websocket)
         print(f"[ws_server] Client disconnected: {remote}  ({len(connected_clients)} total)")
@@ -424,7 +449,7 @@ def serialize_state(threshold: float) -> dict:
     }
 
 
-async def broadcast_state(threshold: float):
+async def broadcast_state():
     """Broadcast full LiveState JSON to all connected WebSocket clients at 10fps."""
     # Wait for feeds to warm up before broadcasting
     await asyncio.sleep(3)
@@ -432,7 +457,7 @@ async def broadcast_state(threshold: float):
     while True:
         if connected_clients:
             try:
-                payload = json.dumps(serialize_state(threshold))
+                payload = json.dumps(serialize_state(threshold_config["value"]))
                 websockets.broadcast(connected_clients, payload)
             except Exception as e:
                 print(f"[ws_server] Broadcast error: {e}")
@@ -443,6 +468,9 @@ async def broadcast_state(threshold: float):
 
 async def main(threshold: float, port: int = 8765):
     """Start all WebSocket feeds, opportunity detector, and broadcast loop."""
+    # Set shared threshold from CLI arg
+    threshold_config["value"] = threshold
+
     binance  = ccxt.binance({"options": {"defaultType": "spot"}})
     backpack = ccxt.backpack()
 
@@ -470,11 +498,11 @@ async def main(threshold: float, port: int = 8765):
     # USDT/USDC rate tracker
     tasks.append(asyncio.create_task(watch_usdt_usdc(binance)))
 
-    # Opportunity detector (runs 20x/sec)
+    # Opportunity detector (runs 20x/sec, reads threshold_config)
     tasks.append(asyncio.create_task(opportunity_detector()))
 
     # WebSocket broadcast loop (10fps)
-    tasks.append(asyncio.create_task(broadcast_state(threshold)))
+    tasks.append(asyncio.create_task(broadcast_state()))
 
     try:
         await asyncio.gather(*tasks)

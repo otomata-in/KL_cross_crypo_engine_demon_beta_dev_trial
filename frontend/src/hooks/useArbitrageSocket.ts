@@ -89,4 +89,22 @@ export function useArbitrageSocket() {
       }
     };
   }, [setLiveState, setWsStatus]);
+
+  // ── Send threshold changes to backend ──────────────────────────
+  const threshold = useArbitrageStore((s) => s.threshold);
+  const prevThresholdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // Skip initial sync (backend already has its default)
+    if (prevThresholdRef.current === null) {
+      prevThresholdRef.current = threshold;
+      return;
+    }
+    prevThresholdRef.current = threshold;
+
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'set_threshold', value: threshold }));
+    }
+  }, [threshold]);
 }
