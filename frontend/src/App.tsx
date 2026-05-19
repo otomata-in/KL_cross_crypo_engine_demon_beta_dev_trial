@@ -5,6 +5,9 @@ import { TokenGrid } from './components/TokenGrid';
 import { MarketHeatmap } from './components/MarketHeatmap';
 import { ActionFeed } from './components/ActionFeed';
 import { WaitingScreen } from './components/WaitingScreen';
+import { OpportunitiesPage } from './components/OpportunitiesPage';
+
+import { AnalyticsPage } from './components/AnalyticsPage';
 
 function App() {
   // Establish WebSocket connection on mount
@@ -13,6 +16,7 @@ function App() {
   const liveState = useArbitrageStore((s) => s.liveState);
   const wsStatus = useArbitrageStore((s) => s.wsStatus);
   const viewMode = useArbitrageStore((s) => s.viewMode);
+  const activeTab = useArbitrageStore((s) => s.activeTab);
 
   // Show waiting screen if not connected or no data yet
   if (!liveState || (wsStatus !== 'connected' && wsStatus !== 'connecting')) {
@@ -31,7 +35,15 @@ function App() {
       <div className="flex h-[calc(100vh-88px)]">
         {/* Main content */}
         <main className="flex-1 overflow-y-auto p-4">
-          {viewMode === 'cards' ? <TokenGrid /> : <MarketHeatmap />}
+          {activeTab === 'logs' ? (
+            <OpportunitiesPage />
+          ) : activeTab === 'analytics' ? (
+            <AnalyticsPage />
+          ) : viewMode === 'cards' ? (
+            <TokenGrid />
+          ) : (
+            <MarketHeatmap />
+          )}
         </main>
 
         {/* Sidebar — Action Feed */}

@@ -27,6 +27,32 @@ export interface OppLast {
   pair: string;       // "binance→backpack"
 }
 
+export interface OpportunityRecord {
+  timestamp_utc: string;
+  token: string;
+  ex_buy: string;
+  ex_sell: string;
+  direction: string;
+  gross_spread_pct: string | number;
+  net_spread_pct: string | number;
+  pair_fees_pct: string | number;
+  buy_ask: string | number;
+  sell_bid: string | number;
+  usdt_usdc_rate: string | number;
+}
+
+export interface AnalyticsData {
+  top_coins: {
+    token: string;
+    count: number;
+    best_route: string | null;
+    max_net: number;
+  }[];
+  peak_hour: [string, number] | null;
+  peak_day: [string, number] | null;
+  total_opps: number;
+}
+
 export interface TokenData {
   category: string;
   exchanges: Record<string, ExchangeData>;  // keyed by exchange name

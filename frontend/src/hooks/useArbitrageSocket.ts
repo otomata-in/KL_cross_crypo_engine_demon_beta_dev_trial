@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react';
 import { useArbitrageStore } from '../store';
 import type { LiveState } from '../types';
 
-const WS_URL = 'ws://127.0.0.1:8765';
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = import.meta.env.VITE_WS_URL || `${protocol}//${window.location.host}/ws`;
 const RECONNECT_DELAY_MS = 2000;
 const STALE_TIMEOUT_MS = 3000; // consider connection dead if no data for 3s
 
@@ -42,15 +43,29 @@ export function useArbitrageSocket() {
         setWsStatus('connected');
         resetStaleTimer();
         console.log('[WS] Connected to backend');
+        ws.send(JSON.stringify({ type: 'get_recent_opportunities', limit: 100 }));
       };
 
       ws.onmessage = (event) => {
         if (!isMounted) return;
         try {
-          const data: LiveState = JSON.parse(event.data);
-          setLiveState(data);
-          setWsStatus('connected');
-          resetStaleTimer();
+          const rawData = JSON.parse(event.data);
+          if (rawData.type === 'recent_opportunities') {
+            useArbitrageStore.getState().setOpportunities(rawData.data);
+          } else if (rawData.type === 'new_opportunity') {
+            useArbitrageStore.getState().addOpportunity(rawData.data);
+          } else if (rawData.type === 'analytics_data') {
+            useArbitrageStore.getState().setAnalyticsData(rawData.data);
+          } else if (rawData.type === 'logs_reset') {
+            useArbitrageStore.getState().setOpportunities([]);
+            // Request fresh logs and analytics
+            ws.send(JSON.stringify({ type: 'get_recent_opportunities', limit: 100 }));
+            ws.send(JSON.stringify({ type: 'get_analytics' }));
+          } else {
+            setLiveState(rawData as LiveState);
+            setWsStatus('connected');
+            resetStaleTimer();
+          }
         } catch (e) {
           console.error('[WS] Parse error:', e);
         }
@@ -79,8 +94,17 @@ export function useArbitrageSocket() {
 
     connect();
 
+    const handleWsSend = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(customEvent.detail));
+      }
+    };
+    window.addEventListener('ws-send', handleWsSend);
+
     return () => {
       isMounted = false;
+      window.removeEventListener('ws-send', handleWsSend);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (staleTimerRef.current) clearTimeout(staleTimerRef.current);
       if (wsRef.current) {

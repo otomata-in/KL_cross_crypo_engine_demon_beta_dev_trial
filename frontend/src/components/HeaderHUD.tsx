@@ -34,6 +34,7 @@ export const HeaderHUD: React.FC = () => {
   const setThreshold = useArbitrageStore((s) => s.setThreshold);
   const viewMode = useArbitrageStore((s) => s.viewMode);
   const setViewMode = useArbitrageStore((s) => s.setViewMode);
+  const activeTab = useArbitrageStore((s) => s.activeTab);
 
   const rate = liveState?.usdt_usdc_rate ?? 1.0;
   const pegDev = (rate - 1.0) * 100;
@@ -104,23 +105,47 @@ export const HeaderHUD: React.FC = () => {
             <span className="text-[10px] text-gray-600">%</span>
           </div>
 
-          {/* View Mode Toggle */}
-          <div className="flex items-center bg-gray-900/50 rounded-lg p-0.5 border border-border">
+          {/* Page/Tab Toggle */}
+          <div className="flex items-center bg-gray-900/50 rounded-lg p-0.5 border border-border mr-2">
             <button
-              onClick={() => setViewMode('cards')}
-              className={`p-1.5 rounded-md transition-colors ${viewMode === 'cards' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
-              title="Card Grid View"
+              onClick={() => useArbitrageStore.getState().setActiveTab('dashboard')}
+              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${activeTab === 'dashboard' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
             >
-               <LayoutGrid className="w-3.5 h-3.5" />
+              Dashboard
             </button>
             <button
-              onClick={() => setViewMode('heatmap')}
-              className={`p-1.5 rounded-md transition-colors ${viewMode === 'heatmap' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
-              title="Heatmap View"
+              onClick={() => useArbitrageStore.getState().setActiveTab('logs')}
+              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${activeTab === 'logs' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
             >
-               <Table className="w-3.5 h-3.5" />
+              Logs
+            </button>
+            <button
+              onClick={() => useArbitrageStore.getState().setActiveTab('analytics')}
+              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${activeTab === 'analytics' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              Analytics
             </button>
           </div>
+
+          {/* View Mode Toggle (only show on dashboard) */}
+          {activeTab === 'dashboard' && (
+            <div className="flex items-center bg-gray-900/50 rounded-lg p-0.5 border border-border">
+              <button
+                onClick={() => setViewMode('cards')}
+                className={`p-1.5 rounded-md transition-colors ${viewMode === 'cards' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
+                title="Card Grid View"
+              >
+                 <LayoutGrid className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setViewMode('heatmap')}
+                className={`p-1.5 rounded-md transition-colors ${viewMode === 'heatmap' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
+                title="Heatmap View"
+              >
+                 <Table className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Uptime */}
           <div className="flex items-center gap-2 text-xs text-gray-400">

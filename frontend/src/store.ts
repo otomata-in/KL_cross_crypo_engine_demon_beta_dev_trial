@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { LiveState, ConnectionStatus } from './types';
+import type { LiveState, ConnectionStatus, OpportunityRecord, AnalyticsData } from './types';
 
 interface ArbitrageStore {
   // Live data from WebSocket
@@ -16,6 +16,20 @@ interface ArbitrageStore {
   // View mode
   viewMode: 'cards' | 'heatmap';
   setViewMode: (mode: 'cards' | 'heatmap') => void;
+
+  activeTab: 'dashboard' | 'logs' | 'analytics';
+  setActiveTab: (tab: 'dashboard' | 'logs' | 'analytics') => void;
+
+  opportunities: OpportunityRecord[];
+  setOpportunities: (opportunities: OpportunityRecord[]) => void;
+  addOpportunity: (opportunity: OpportunityRecord) => void;
+
+  analyticsData: AnalyticsData | null;
+  setAnalyticsData: (data: AnalyticsData | null) => void;
+
+  setLiveState: (liveState: LiveState) => void;
+  setWsStatus: (wsStatus: ConnectionStatus) => void;
+  setThreshold: (threshold: number) => void;
 }
 
 export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
@@ -25,6 +39,15 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
   threshold: 1.0,
   _thresholdInitialized: false,
   viewMode: 'cards',
+  activeTab: 'dashboard',
+  opportunities: [],
+  analyticsData: null,
+
+  setActiveTab: (activeTab) => set({ activeTab }),
+  setOpportunities: (opportunities) => set({ opportunities }),
+  addOpportunity: (opportunity) =>
+    set((state) => ({ opportunities: [opportunity, ...state.opportunities] })),
+  setAnalyticsData: (analyticsData) => set({ analyticsData }),
 
   setLiveState: (liveState) => {
     const state = get();

@@ -15,9 +15,10 @@ import asyncio
 import csv
 import json
 import sys
+import collections
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from itertools import combinations
 
@@ -400,8 +401,115 @@ async def opportunity_detector():
                     }
                     await opp_logger.log(record)
 
+                    if connected_clients:
+                        try:
+                            new_opp = json.dumps({"type": "new_opportunity", "data": record})
+                            websockets.broadcast(connected_clients, new_opp)
+                        except Exception as e:
+                            print(f"[ws_server] Broadcast error for new opp: {e}")
+
         await asyncio.sleep(0.05)  # 20 checks/second
 
+
+# ── Analytics & Reset ────────────────────────────────────────────
+
+def run_analytics() -> dict:
+    if not os.path.exists(OPP_LOG_FILE):
+        return {"top_coins": [], "peak_hour": None, "peak_day": None, "total_opps": 0}
+
+    token_counter = collections.Counter()
+    route_counter = collections.Counter()
+    hour_counter = collections.Counter()
+    day_counter = collections.Counter()
+    token_max_spread = {}
+    total_opps = 0
+
+    try:
+        with open(OPP_LOG_FILE, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                total_opps += 1
+                token = row.get("token")
+                buy_ex = row.get("ex_buy")
+                sell_ex = row.get("ex_sell")
+                ts_str = row.get("timestamp_utc")
+
+                if token and buy_ex and sell_ex:
+                    token_counter[token] += 1
+                    route_counter[f"{token}:{buy_ex}->{sell_ex}"] += 1
+                    try:
+                        net_spread = float(row.get("net_spread_pct", 0))
+                        if token not in token_max_spread or net_spread > token_max_spread[token]:
+                            token_max_spread[token] = net_spread
+                    except (ValueError, TypeError):
+                        pass
+
+                if ts_str:
+                    try:
+                        # Convert to IST (UTC + 5:30)
+                        dt_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        dt_ist = dt_utc + timedelta(hours=5, minutes=30)
+                        # 12-hour format e.g. "02:00 PM"
+                        hour_str = dt_ist.strftime('%I:00 %p')
+                        hour_counter[hour_str] += 1
+                        day_counter[dt_ist.strftime("%A")] += 1
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"[ws_server] Analytics parse error: {e}")
+
+    # Sort top 5 coins by max_net_spread instead of frequency
+    sorted_tokens_by_gap = sorted(token_max_spread.items(), key=lambda x: x[1], reverse=True)
+    top_5_tokens = [t for t, _ in sorted_tokens_by_gap[:5]]
+    
+    top_coins_data = []
+    for token in top_5_tokens:
+        best_route = None
+        best_route_count = -1
+        for route, count in route_counter.items():
+            if route.startswith(f"{token}:"):
+                if count > best_route_count:
+                    best_route_count = count
+                    best_route = route.split(":")[1]
+        top_coins_data.append({
+            "token": token,
+            "count": token_counter[token],
+            "best_route": best_route,
+            "max_net": round(token_max_spread.get(token, 0), 4)
+        })
+
+    return {
+        "top_coins": top_coins_data,
+        "peak_hour": hour_counter.most_common(1)[0] if hour_counter else None,
+        "peak_day": day_counter.most_common(1)[0] if day_counter else None,
+        "total_opps": total_opps
+    }
+
+async def handle_analytics(websocket):
+    analytics = await asyncio.to_thread(run_analytics)
+    try:
+        await websocket.send(json.dumps({
+            "type": "analytics_data",
+            "data": analytics
+        }))
+    except Exception as e:
+        print(f"[ws_server] Failed to send analytics: {e}")
+
+async def reset_logs(websocket):
+    try:
+        with open(OPP_LOG_FILE, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=OPP_COLUMNS)
+            writer.writeheader()
+        
+        state.opp_total = 0
+        state.opp_count = {t: 0 for t in TOKENS}
+        state.opp_best = {}
+        state.spread_history = {t: {"max_net": -999} for t in TOKENS}
+        
+        if connected_clients:
+            websockets.broadcast(connected_clients, json.dumps({"type": "logs_reset"}))
+    except Exception as e:
+        print(f"[ws_server] Error resetting logs: {e}")
 
 # ── WebSocket broadcast server ───────────────────────────────────
 
@@ -427,6 +535,25 @@ async def ws_handler(websocket):
                     threshold_config["value"] = new_val
                     if abs(new_val - old_val) > 0.0001:
                         print(f"[ws_server] Threshold updated: {old_val}% → {new_val}% (by {remote})")
+                elif msg.get("type") == "get_recent_opportunities":
+                    limit = min(200, max(1, int(msg.get("limit", 100))))
+                    try:
+                        with open(OPP_LOG_FILE, "r") as f:
+                            q = collections.deque(f, limit)
+                        reader = csv.DictReader(q, fieldnames=OPP_COLUMNS)
+                        logs = list(reader)
+                        if logs and logs[0].get("timestamp_utc") == "timestamp_utc":
+                            logs.pop(0)
+                        await websocket.send(json.dumps({
+                            "type": "recent_opportunities",
+                            "data": logs
+                        }))
+                    except Exception as e:
+                        print(f"[ws_server] Error reading logs: {e}")
+                elif msg.get("type") == "get_analytics":
+                    asyncio.create_task(handle_analytics(websocket))
+                elif msg.get("type") == "reset_logs":
+                    asyncio.create_task(reset_logs(websocket))
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass
     except websockets.exceptions.ConnectionClosed:

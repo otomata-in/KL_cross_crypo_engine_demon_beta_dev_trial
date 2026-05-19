@@ -37,8 +37,8 @@ export const WaitingScreen: React.FC = () => {
           </h2>
           <p className="text-sm text-gray-500">
             {isConnecting
-              ? 'Establishing WebSocket connection to ws://127.0.0.1:8765'
-              : 'Unable to reach the Python backend. Make sure ws_server.py is running.'}
+              ? 'Establishing WebSocket connection to backend...'
+              : 'Unable to reach the Python backend. Make sure the server is running and accessible.'}
           </p>
         </div>
 
@@ -47,7 +47,7 @@ export const WaitingScreen: React.FC = () => {
           <span className={`w-2 h-2 rounded-full ${
             isConnecting ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'
           }`} />
-          <span>ws://127.0.0.1:8765</span>
+          <span>Backend</span>
           <span>•</span>
           <span>{wsStatus}</span>
         </div>
