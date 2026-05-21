@@ -41,6 +41,7 @@ EXCHANGES = {
         "quote":      "USDT",
         "fee_taker":  0.10,            # %
         "gas":        0.00,            # % (no blockchain transfer for CEX↔CEX)
+        "ob_limit":   10,              # Orderbook depth limit for WS
         "enabled":    True,
         "options":    {"defaultType": "spot"},
         "api_key":    os.getenv("API_KEY_BINANCE"),
@@ -52,6 +53,7 @@ EXCHANGES = {
         "quote":      "USDC",
         "fee_taker":  0.10,
         "gas":        0.01,            # Solana network tx fee
+        "ob_limit":   10,
         "enabled":    True,
         "options":    {},
         "api_key":    os.getenv("API_KEY_BACKPACK"),
@@ -63,6 +65,7 @@ EXCHANGES = {
         "quote":      "USDT",
         "fee_taker":  0.10,
         "gas":        0.00,
+        "ob_limit":   50,              # Bybit spot only accepts [1, 50, 200, 1000]
         "enabled":    True,
         "options":    {"defaultType": "spot"},
         "api_key":    os.getenv("API_KEY_BYBIT"),
@@ -74,6 +77,7 @@ EXCHANGES = {
         "quote":      "USDT",
         "fee_taker":  0.20,            # Dex-Trade taker fee
         "gas":        0.00,
+        "ob_limit":   None,            # REST adapter — no limit param
         "enabled":    True,
         "options":    {},
         "api_key":    os.getenv("API_KEY_DEX"),
@@ -249,15 +253,17 @@ def parse_orderbook(ob: dict) -> dict:
 
 async def watch_orderbook(exchange_obj, exchange_name: str, token: str, symbol: str):
     """Generic WebSocket orderbook watcher for any ccxt.pro exchange."""
+    ob_limit = EXCHANGES[exchange_name].get("ob_limit", 10)
     while True:
         try:
-            ob = await exchange_obj.watch_order_book(symbol, limit=10)
+            ob = await exchange_obj.watch_order_book(symbol, limit=ob_limit)
             state.exchanges[exchange_name][token] = parse_orderbook(ob)
             state.ws_status[exchange_name][token] = "connected"
             state.update_count[exchange_name] += 1
         except Exception as e:
-            err_msg = str(e)[:30]
-            state.ws_status[exchange_name][token] = f"error:{err_msg}"
+            err_msg = str(e)[:80]
+            state.ws_status[exchange_name][token] = f"error:{err_msg[:30]}"
+            print(f"[ws_server] {exchange_name}/{token} feed error: {err_msg}")
             await asyncio.sleep(2)
 
 
@@ -395,8 +401,8 @@ async def opportunity_detector():
                         "gross_spread_pct": round(spread, 4),
                         "net_spread_pct": round(net_spread, 4),
                         "pair_fees_pct": round(pair_fees, 4),
-                        "buy_ask": buy_ask,
-                        "sell_bid": sell_bid,
+                        "buy_ask": normalize_to_usdt(buy_ask, buy_ex, usdt_usdc),
+                        "sell_bid": normalize_to_usdt(sell_bid, sell_ex, usdt_usdc),
                         "usdt_usdc_rate": usdt_usdc,
                     }
                     await opp_logger.log(record)
@@ -651,6 +657,10 @@ def serialize_state(threshold: float) -> dict:
             best_pair_entry = next(
                 (sp for sp in spread_pairs if sp["net"] == best_net), None
             )
+
+        # Update session high from live spread data (not just threshold-filtered opps)
+        if best_net is not None and best_net > state.spread_history[token]["max_net"]:
+            state.spread_history[token]["max_net"] = best_net
 
         # Session high
         sh_net = state.spread_history[token]["max_net"]
