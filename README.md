@@ -4,11 +4,14 @@ A high-frequency, multi-exchange crypto arbitrage bot built with Python (asyncio
 
 ## Features
 - **Multi-Exchange Support**: Binance, Backpack, Bybit, Dex-Trade.
-- **Split-Wallet Execution**: Simultaneous buy/sell logic on two different exchanges.
+- **Split-Wallet Execution**: Simultaneous buy/sell logic on two different exchanges with 5% position sizing.
 - **Asymmetric Fill Safety**: Automatically reverts exposed positions if one leg of an arbitrage trade fails.
-- **Solana Rebalancing**: Tracks inventory skew across exchanges to trigger Solana on-chain rebalancing.
+- **Solana Rebalancing**: Tracks inventory skew across exchanges to trigger Solana on-chain rebalancing. Rebalances both Quote (USDT) and Base Token inventory at a 20% imbalance threshold.
 - **Trade Control UI**: Interactive dashboard to monitor active trades, rebalances, and execution history.
-- **Mock & Pro Modes**: Easily toggle between paper-trading and live execution.
+- **PnL Analytics Dashboard**: Granular Net Profit & Loss breakdown per token, filterable by Timeframe (Session/Day/Week/Month/Total) and by Exchange.
+- **Wallet Persistence**: In Mock mode, mock trade history is stored in TimescaleDB and wallets dynamically reconstruct their balances on startup. 
+- **Dynamic Mock Initialization**: Wallets can be hard-reset from the UI. Token balances lazily initialize to exactly $250-worth at the live market price right before the first trade.
+- **Mock & Pro Modes**: Easily toggle between paper-trading and live execution from the UI.
 
 ---
 
@@ -20,7 +23,7 @@ A high-frequency, multi-exchange crypto arbitrage bot built with Python (asyncio
 - Python 3.9+ (for the Backend)
 
 ### 2. Start the Database
-The bot requires TimescaleDB (PostgreSQL) to store opportunities and trade history.
+The bot requires TimescaleDB (PostgreSQL) to store opportunities, trades, and rebalance history.
 
 ```bash
 # Start TimescaleDB locally
@@ -42,7 +45,7 @@ pip install -r requirements.txt
 # Start the python backend
 python main.py
 ```
-*Note: `main.py` is the entry point that spins up the engine and `ws_server.py` automatically.*
+*Note: `main.py` is the entry point that spins up the core execution engine and the `ws_server.py` websocket transport.*
 
 ### 4. Start the Frontend UI
 The frontend provides the interactive Trade Control and monitoring dashboard.
@@ -63,18 +66,33 @@ The frontend will be available at [http://localhost:5173](http://localhost:5173)
 
 ## ☁️ Deployment (AWS)
 
-The bot is designed to run persistently using `pm2`.
+The production deployment uses `pm2` for the Python backend and `nginx` for the static React frontend.
+
+### 1. Deploying Updates
+You can deploy updates from your local machine using the `deploy_remote.sh` script, or run it directly on the server:
 
 ```bash
-# Restart the backend
-pm2 restart arb-backend
-
-# Restart the frontend
-pm2 restart pippin_frontend
-
-# View live logs
-pm2 logs
+# Run the deployment script on the remote server
+bash ~/pippin_arb_bot/deploy_remote.sh
 ```
+
+### 2. What `deploy_remote.sh` does:
+1. Installs any new Python dependencies.
+2. Removes `.env.local` to ensure the production WebSocket URL is dynamically generated based on the hosting IP.
+3. Builds the production React bundle (`npm run build`).
+4. Restarts the `arb-backend` PM2 process.
+5. Copies the frontend build to `/usr/share/nginx/html/arbitrage/`.
+
+### 3. Monitoring Production
+```bash
+# View live backend logs
+pm2 logs arb-backend
+
+# View PM2 process status
+pm2 status
+```
+
+---
 
 ## Environment Variables (`.env`)
 Make sure your `.env` contains your API keys and the correct database credentials:
