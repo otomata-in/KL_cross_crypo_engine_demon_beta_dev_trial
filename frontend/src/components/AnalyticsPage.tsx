@@ -142,7 +142,7 @@ export const AnalyticsPage: React.FC = () => {
              <div>
                <h4 className="text-sm font-semibold text-yellow-500">Historical Context</h4>
                <p className="text-xs text-yellow-500/80 mt-1">
-                 These statistics are derived from your entire `opportunities.csv` file. Changing your minimum net profit threshold affects what gets logged, which naturally shifts these analytics over time.
+                 These statistics are derived from your TimescaleDB opportunity history. Changing your minimum net profit threshold affects what gets logged, which naturally shifts these analytics over time.
                </p>
              </div>
           </div>
