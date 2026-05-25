@@ -160,7 +160,14 @@ async def get_recent_trades(limit: int = 50) -> List[dict]:
         limit,
     )
 
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        d = dict(row)
+        if hasattr(d.get("trade_time"), "isoformat"):
+            d["trade_time"] = d["trade_time"].isoformat()
+        result.append(d)
+        
+    return result
 
 
 async def insert_trade_group(trade_dict: dict) -> None:
@@ -237,4 +244,12 @@ async def get_active_rebalances() -> List[dict]:
     if pool is None:
         return []
     rows = await pool.fetch("SELECT * FROM rebalance_transfers WHERE status = 'pending' ORDER BY created_at DESC")
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        d = dict(row)
+        if hasattr(d.get("created_at"), "isoformat"):
+            d["created_at"] = d["created_at"].isoformat()
+        if hasattr(d.get("updated_at"), "isoformat"):
+            d["updated_at"] = d["updated_at"].isoformat()
+        result.append(d)
+    return result

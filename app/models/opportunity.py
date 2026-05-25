@@ -94,7 +94,7 @@ OPPORTUNITY_COLUMNS = [
 OPPORTUNITY_INSERT_SQL = """
     INSERT INTO opportunities (
         timestamp_utc, token, ex_buy, ex_sell, direction,
-        gross_spread_pct, net_spread_pct, pair_fees_pct,
+        gross_spread, net_spread, pair_fees,
         buy_ask, sell_bid, usdt_usdc_rate
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 """

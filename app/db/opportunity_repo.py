@@ -56,7 +56,7 @@ async def get_recent(limit: int = 100) -> List[dict]:
     rows = await pool.fetch(
         """
         SELECT timestamp_utc, token, ex_buy, ex_sell, direction,
-               gross_spread_pct, net_spread_pct, pair_fees_pct,
+               gross_spread AS gross_spread_pct, net_spread AS net_spread_pct, pair_fees AS pair_fees_pct,
                buy_ask, sell_bid, usdt_usdc_rate
         FROM opportunities
         ORDER BY timestamp_utc DESC
@@ -100,7 +100,7 @@ async def run_analytics() -> dict:
         top_rows = await conn.fetch("""
             SELECT token,
                    COUNT(*)            AS opp_count,
-                   MAX(net_spread_pct) AS max_net
+                   MAX(net_spread) AS max_net
             FROM opportunities
             GROUP BY token
             ORDER BY max_net DESC
@@ -189,8 +189,8 @@ async def get_timeseries_data(token: str, interval: str = "5 minutes", limit: in
     rows = await pool.fetch(
         f"""
         SELECT time_bucket('{safe_interval}', timestamp_utc) AS bucket,
-               MAX(net_spread_pct) AS max_net,
-               AVG(net_spread_pct) AS avg_net
+               MAX(net_spread) AS max_net,
+               AVG(net_spread) AS avg_net
         FROM opportunities
         WHERE token = $1
         GROUP BY bucket
@@ -226,10 +226,10 @@ async def get_consistency_metrics(limit: int = 10) -> List[dict]:
         """
         WITH recent_opps AS (
             SELECT token, ex_buy || '->' || ex_sell AS route,
-                   timestamp_utc, net_spread_pct
+                   timestamp_utc, net_spread AS net_spread_pct
             FROM opportunities
             WHERE timestamp_utc > NOW() - INTERVAL '30 minutes'
-              AND net_spread_pct > 0
+              AND net_spread > 0
         ),
         grouped AS (
             SELECT token, route,
