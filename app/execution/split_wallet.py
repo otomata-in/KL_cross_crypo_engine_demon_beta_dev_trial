@@ -19,6 +19,9 @@ import structlog
 
 logger = structlog.get_logger("split_wallet")
 
+# Track last execution time per token to prevent spam
+_cooldowns = {}
+
 async def execute_simultaneous_arb(
     token: str,
     ex_buy: str,
@@ -32,16 +35,21 @@ async def execute_simultaneous_arb(
     Executes a split-wallet arbitrage trade by firing Buy and Sell orders simultaneously.
     Sizes the trade at 5% of the available inventory across both wallets.
     """
+    now = time.time()
+    # 5-second cooldown per token to prevent order spam
+    if token in _cooldowns and now - _cooldowns[token] < 5.0:
+        return
+    _cooldowns[token] = now
+
     state = get_state()
     cfg = get_config()
     
     trade_id = str(uuid.uuid4())[:12]
     
     # 1. Position Sizing (5% of split wallet)
-    # In a real implementation, we fetch actual balances. 
-    # Here we mock the balance if missing.
-    buy_quote_balance = state.balances.get(ex_buy, {}).get("USDT", 1000.0)
-    sell_base_balance = state.balances.get(ex_sell, {}).get(token, 100.0)
+    # Mocking $500 total capital ($250 USDT on buy side, $250 worth of tokens on sell side)
+    buy_quote_balance = state.balances.get(ex_buy, {}).get("USDT", 250.0)
+    sell_base_balance = state.balances.get(ex_sell, {}).get(token, 250.0 / buy_price)
     
     # We want to use 5% of available capital
     trade_capital_usdt = buy_quote_balance * 0.05
