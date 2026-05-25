@@ -173,3 +173,94 @@ async def reset() -> None:
         return
     await pool.execute("TRUNCATE TABLE opportunities")
     print("[db] Opportunities table truncated")
+
+
+async def get_timeseries_data(token: str, interval: str = "5 minutes", limit: int = 100) -> List[dict]:
+    """
+    Fetch downsampled time-series data for a specific token using TimescaleDB time_bucket.
+    """
+    pool = get_pool()
+    if pool is None:
+        return []
+
+    # Valid intervals: '1 minute', '5 minutes', '15 minutes', '1 hour'
+    safe_interval = interval if interval in ['1 minute', '5 minutes', '15 minutes', '1 hour'] else '5 minutes'
+
+    rows = await pool.fetch(
+        f"""
+        SELECT time_bucket('{safe_interval}', timestamp_utc) AS bucket,
+               MAX(net_spread_pct) AS max_net,
+               AVG(net_spread_pct) AS avg_net
+        FROM opportunities
+        WHERE token = $1
+        GROUP BY bucket
+        ORDER BY bucket DESC
+        LIMIT $2
+        """,
+        token, limit
+    )
+
+    result = []
+    for row in rows:
+        result.append({
+            "bucket": row["bucket"].isoformat(),
+            "max_net": round(float(row["max_net"]), 4),
+            "avg_net": round(float(row["avg_net"]), 4),
+        })
+    return result
+
+
+async def get_consistency_metrics(limit: int = 10) -> List[dict]:
+    """
+    Find consistent spreads by calculating the duration between the first and last
+    seen timestamp of a sustained spread opportunity.
+    """
+    pool = get_pool()
+    if pool is None:
+        return []
+
+    # A simple consistency check: groups opportunities by token and route within 
+    # a recent timeframe and finds routes that were sustained for more than X seconds.
+    # We use a 10-minute lookback for "current" consistency.
+    rows = await pool.fetch(
+        """
+        WITH recent_opps AS (
+            SELECT token, ex_buy || '->' || ex_sell AS route,
+                   timestamp_utc, net_spread_pct
+            FROM opportunities
+            WHERE timestamp_utc > NOW() - INTERVAL '30 minutes'
+              AND net_spread_pct > 0
+        ),
+        grouped AS (
+            SELECT token, route,
+                   MIN(timestamp_utc) AS first_seen,
+                   MAX(timestamp_utc) AS last_seen,
+                   MAX(net_spread_pct) AS max_net,
+                   COUNT(*) AS observations
+            FROM recent_opps
+            GROUP BY token, route
+        )
+        SELECT token, route,
+               first_seen, last_seen,
+               EXTRACT(EPOCH FROM (last_seen - first_seen)) AS duration_seconds,
+               max_net, observations
+        FROM grouped
+        WHERE EXTRACT(EPOCH FROM (last_seen - first_seen)) > 2 -- At least 2 seconds duration
+        ORDER BY duration_seconds DESC
+        LIMIT $1
+        """,
+        limit
+    )
+
+    result = []
+    for row in rows:
+        result.append({
+            "token": row["token"],
+            "route": row["route"],
+            "first_seen": row["first_seen"].isoformat(),
+            "last_seen": row["last_seen"].isoformat(),
+            "duration_seconds": float(row["duration_seconds"]),
+            "max_net": round(float(row["max_net"]), 4),
+            "observations": row["observations"],
+        })
+    return result

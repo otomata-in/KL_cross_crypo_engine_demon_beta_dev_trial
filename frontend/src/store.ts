@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { LiveState, ConnectionStatus, OpportunityRecord, AnalyticsData } from './types';
+import type { LiveState, ConnectionStatus, OpportunityRecord, AnalyticsData, TimeseriesData, ConsistencyRow } from './types';
 
 interface ArbitrageStore {
   // Live data from WebSocket
@@ -27,6 +27,12 @@ interface ArbitrageStore {
   analyticsData: AnalyticsData | null;
   setAnalyticsData: (data: AnalyticsData | null) => void;
 
+  timeseriesData: Record<string, TimeseriesData>;
+  setTimeseriesData: (token: string, data: TimeseriesData) => void;
+
+  consistencyData: ConsistencyRow[] | null;
+  setConsistencyData: (data: ConsistencyRow[] | null) => void;
+
   setLiveState: (liveState: LiveState) => void;
   setWsStatus: (wsStatus: ConnectionStatus) => void;
   setThreshold: (threshold: number) => void;
@@ -42,12 +48,18 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
   activeTab: 'dashboard',
   opportunities: [],
   analyticsData: null,
+  timeseriesData: {},
+  consistencyData: null,
 
   setActiveTab: (activeTab) => set({ activeTab }),
   setOpportunities: (opportunities) => set({ opportunities }),
   addOpportunity: (opportunity) =>
     set((state) => ({ opportunities: [opportunity, ...state.opportunities] })),
   setAnalyticsData: (analyticsData) => set({ analyticsData }),
+  setTimeseriesData: (token, data) => set((state) => ({ 
+    timeseriesData: { ...state.timeseriesData, [token]: data } 
+  })),
+  setConsistencyData: (consistencyData) => set({ consistencyData }),
 
   setLiveState: (liveState) => {
     const state = get();

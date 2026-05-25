@@ -56,6 +56,10 @@ export function useArbitrageSocket() {
             useArbitrageStore.getState().addOpportunity(rawData.data);
           } else if (rawData.type === 'analytics_data') {
             useArbitrageStore.getState().setAnalyticsData(rawData.data);
+          } else if (rawData.type === 'timeseries_data') {
+            useArbitrageStore.getState().setTimeseriesData(rawData.data.token, rawData.data);
+          } else if (rawData.type === 'consistency_data') {
+            useArbitrageStore.getState().setConsistencyData(rawData.data);
           } else if (rawData.type === 'logs_reset') {
             useArbitrageStore.getState().setOpportunities([]);
             // Request fresh logs and analytics

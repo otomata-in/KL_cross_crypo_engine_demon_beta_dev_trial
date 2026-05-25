@@ -86,6 +86,24 @@ class WebSocketServer:
                             "data": analytics
                         }))
                         
+                    elif msg_type == "get_timeseries":
+                        token = msg.get("token", "SOL")
+                        interval = msg.get("interval", "5 minutes")
+                        limit = min(500, max(1, int(msg.get("limit", 100))))
+                        timeseries = await opportunity_repo.get_timeseries_data(token, interval, limit)
+                        await websocket.send(json.dumps({
+                            "type": "timeseries_data",
+                            "data": { "token": token, "interval": interval, "series": timeseries }
+                        }))
+                        
+                    elif msg_type == "get_consistency":
+                        limit = min(50, max(1, int(msg.get("limit", 10))))
+                        consistency = await opportunity_repo.get_consistency_metrics(limit)
+                        await websocket.send(json.dumps({
+                            "type": "consistency_data",
+                            "data": consistency
+                        }))
+                        
                     elif msg_type == "reset_logs":
                         await opportunity_repo.reset()
                         

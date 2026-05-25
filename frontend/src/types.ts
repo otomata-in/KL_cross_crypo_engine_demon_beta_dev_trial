@@ -108,4 +108,26 @@ export interface LiveState {
   token_data: Record<string, TokenData>;
 }
 
+export interface TimeseriesPoint {
+  bucket: string;
+  max_net: number;
+  avg_net: number;
+}
+
+export interface TimeseriesData {
+  token: string;
+  interval: string;
+  series: TimeseriesPoint[];
+}
+
+export interface ConsistencyRow {
+  token: string;
+  route: string;
+  first_seen: string;
+  last_seen: string;
+  duration_seconds: number;
+  max_net: number;
+  observations: number;
+}
+
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';

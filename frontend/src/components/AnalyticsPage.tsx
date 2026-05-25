@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useArbitrageStore } from '../store';
 import { Clock, Calendar, AlertTriangle, RefreshCw, Trash2, Trophy } from 'lucide-react';
+import { TimeseriesChart } from './TimeseriesChart';
+import { ConsistencyTable } from './ConsistencyTable';
 
 export const AnalyticsPage: React.FC = () => {
   const analyticsData = useArbitrageStore((s) => s.analyticsData);
@@ -149,6 +151,10 @@ export const AnalyticsPage: React.FC = () => {
 
         </div>
       </div>
+
+      <TimeseriesChart />
+      <ConsistencyTable />
+
     </div>
   );
 };
