@@ -24,6 +24,8 @@ import sys
 import time
 from datetime import datetime
 
+from typing import Optional
+
 import asyncpg
 from dotenv import load_dotenv
 
@@ -55,7 +57,7 @@ DB_COLUMNS = list(CSV_TO_DB.values())
 
 # ── Parsing ──────────────────────────────────────────────────────
 
-def parse_row(row: dict, line_num: int) -> tuple | None:
+def parse_row(row: dict, line_num: int) -> Optional[tuple]:
     """
     Parse a CSV row dict into a tuple for COPY insertion.
     Returns None if the row is invalid.

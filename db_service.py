@@ -12,6 +12,7 @@ This module mirrors the CSV operations in ws_server.py:
 """
 
 from datetime import datetime, timezone, timedelta
+from typing import List
 from db import get_pool
 
 
@@ -71,7 +72,7 @@ async def insert_opportunity(record: dict) -> bool:
 
 # ── Read: Recent Opportunities ───────────────────────────────────
 
-async def get_recent(limit: int = 100) -> list[dict]:
+async def get_recent(limit: int = 100) -> List[dict]:
     """
     Fetch the most recent N opportunities from TimescaleDB.
     Returns list of dicts matching the CSV column names (for frontend compatibility).

@@ -20,12 +20,14 @@ Usage:
 """
 
 import os
+from typing import Optional
+
 import asyncpg
 from dotenv import load_dotenv
 
 load_dotenv()
 
-_pool: asyncpg.Pool | None = None
+_pool: Optional[asyncpg.Pool] = None
 
 
 def _get_config() -> dict:
@@ -51,7 +53,7 @@ def is_db_read_enabled() -> bool:
     return os.getenv("DB_READ_ENABLED", "false").lower() in ("true", "1", "yes")
 
 
-async def init_db() -> asyncpg.Pool | None:
+async def init_db() -> Optional[asyncpg.Pool]:
     """
     Initialize the asyncpg connection pool.
     Returns the pool, or None if DB is not configured/available.
@@ -104,6 +106,6 @@ async def close_db():
         print("[db] Connection pool closed")
 
 
-def get_pool() -> asyncpg.Pool | None:
+def get_pool() -> Optional[asyncpg.Pool]:
     """Get the current connection pool (may be None if not initialized)."""
     return _pool
