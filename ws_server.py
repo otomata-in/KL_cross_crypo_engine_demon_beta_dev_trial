@@ -12,10 +12,8 @@ Usage:
 Press Ctrl+C to stop.
 """
 import asyncio
-import csv
 import json
 import sys
-import collections
 import os
 import time
 from datetime import datetime, timezone, timedelta
@@ -28,7 +26,7 @@ from dotenv import load_dotenv
 
 from adapters.dextrade_adapter import DexTradeAdapter
 
-# TimescaleDB integration (shadow mode)
+# TimescaleDB
 import db as tsdb
 import db_service
 
@@ -121,22 +119,6 @@ DEFAULT_THRESHOLD = 0.001    # % net profit to highlight (synced to frontend)
 WS_BROADCAST_INTERVAL = 0.1  # 100ms = 10fps
 
 OPP_MIN_SPREAD   = 0.0
-OPP_LOG_FILE     = "logs/opportunities.csv"
-
-# CSV columns — now generic (exchange names instead of hard-coded)
-OPP_COLUMNS = [
-    "timestamp_utc",
-    "token",
-    "ex_buy",
-    "ex_sell",
-    "direction",
-    "gross_spread_pct",
-    "net_spread_pct",
-    "pair_fees_pct",
-    "buy_ask",
-    "sell_bid",
-    "usdt_usdc_rate",
-]
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -207,31 +189,7 @@ class LiveState:
 state = LiveState()
 
 
-# ── Opportunity Logger ───────────────────────────────────────────
 
-class OpportunityLogger:
-    """Logs every detected opportunity to CSV."""
-
-    def __init__(self, filepath: str):
-        self._path = filepath
-        self._lock = asyncio.Lock()
-        self._init_csv()
-
-    def _init_csv(self):
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
-        if not os.path.exists(self._path):
-            with open(self._path, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=OPP_COLUMNS)
-                writer.writeheader()
-
-    async def log(self, record: dict):
-        async with self._lock:
-            with open(self._path, "a", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=OPP_COLUMNS)
-                writer.writerow(record)
-
-
-opp_logger = OpportunityLogger(OPP_LOG_FILE)
 
 
 # ── Orderbook parser ────────────────────────────────────────────
@@ -395,7 +353,7 @@ async def opportunity_detector():
                         "pair": f"{buy_ex}→{sell_ex}",
                     }
 
-                    # Log to CSV
+                    # Log to TimescaleDB
                     record = {
                         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                         "token": token,
@@ -409,14 +367,10 @@ async def opportunity_detector():
                         "sell_bid": normalize_to_usdt(sell_bid, sell_ex, usdt_usdc),
                         "usdt_usdc_rate": usdt_usdc,
                     }
-                    await opp_logger.log(record)
-
-                    # Shadow write: also insert into TimescaleDB
-                    if tsdb.is_db_write_enabled():
-                        try:
-                            await db_service.insert_opportunity(record)
-                        except Exception as db_err:
-                            print(f"[ws_server] DB write error (non-fatal): {db_err}")
+                    try:
+                        await db_service.insert_opportunity(record)
+                    except Exception as db_err:
+                        print(f"[ws_server] DB write error: {db_err}")
 
                     if connected_clients:
                         try:
@@ -430,84 +384,8 @@ async def opportunity_detector():
 
 # ── Analytics & Reset ────────────────────────────────────────────
 
-def run_analytics() -> dict:
-    if not os.path.exists(OPP_LOG_FILE):
-        return {"top_coins": [], "peak_hour": None, "peak_day": None, "total_opps": 0}
-
-    token_counter = collections.Counter()
-    route_counter = collections.Counter()
-    hour_counter = collections.Counter()
-    day_counter = collections.Counter()
-    token_max_spread = {}
-    total_opps = 0
-
-    try:
-        with open(OPP_LOG_FILE, "r") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                total_opps += 1
-                token = row.get("token")
-                buy_ex = row.get("ex_buy")
-                sell_ex = row.get("ex_sell")
-                ts_str = row.get("timestamp_utc")
-
-                if token and buy_ex and sell_ex:
-                    token_counter[token] += 1
-                    route_counter[f"{token}:{buy_ex}->{sell_ex}"] += 1
-                    try:
-                        net_spread = float(row.get("net_spread_pct", 0))
-                        if token not in token_max_spread or net_spread > token_max_spread[token]:
-                            token_max_spread[token] = net_spread
-                    except (ValueError, TypeError):
-                        pass
-
-                if ts_str:
-                    try:
-                        # Convert to IST (UTC + 5:30)
-                        dt_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                        dt_ist = dt_utc + timedelta(hours=5, minutes=30)
-                        # 12-hour format e.g. "02:00 PM"
-                        hour_str = dt_ist.strftime('%I:00 %p')
-                        hour_counter[hour_str] += 1
-                        day_counter[dt_ist.strftime("%A")] += 1
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"[ws_server] Analytics parse error: {e}")
-
-    # Sort top 5 coins by max_net_spread instead of frequency
-    sorted_tokens_by_gap = sorted(token_max_spread.items(), key=lambda x: x[1], reverse=True)
-    top_5_tokens = [t for t, _ in sorted_tokens_by_gap[:5]]
-    
-    top_coins_data = []
-    for token in top_5_tokens:
-        best_route = None
-        best_route_count = -1
-        for route, count in route_counter.items():
-            if route.startswith(f"{token}:"):
-                if count > best_route_count:
-                    best_route_count = count
-                    best_route = route.split(":")[1]
-        top_coins_data.append({
-            "token": token,
-            "count": token_counter[token],
-            "best_route": best_route,
-            "max_net": round(token_max_spread.get(token, 0), 4)
-        })
-
-    return {
-        "top_coins": top_coins_data,
-        "peak_hour": hour_counter.most_common(1)[0] if hour_counter else None,
-        "peak_day": day_counter.most_common(1)[0] if day_counter else None,
-        "total_opps": total_opps
-    }
-
 async def handle_analytics(websocket):
-    # Feature flag: read from TimescaleDB or CSV
-    if tsdb.is_db_read_enabled():
-        analytics = await db_service.run_analytics_db()
-    else:
-        analytics = await asyncio.to_thread(run_analytics)
+    analytics = await db_service.run_analytics_db()
     try:
         await websocket.send(json.dumps({
             "type": "analytics_data",
@@ -518,13 +396,7 @@ async def handle_analytics(websocket):
 
 async def reset_logs(websocket):
     try:
-        with open(OPP_LOG_FILE, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=OPP_COLUMNS)
-            writer.writeheader()
-        
-        # Also truncate TimescaleDB
-        if tsdb.is_db_write_enabled():
-            await db_service.reset_opportunities()
+        await db_service.reset_opportunities()
         
         state.opp_total = 0
         state.opp_count = {t: 0 for t in TOKENS}
@@ -563,16 +435,7 @@ async def ws_handler(websocket):
                 elif msg.get("type") == "get_recent_opportunities":
                     limit = min(200, max(1, int(msg.get("limit", 100))))
                     try:
-                        # Feature flag: read from TimescaleDB or CSV
-                        if tsdb.is_db_read_enabled():
-                            logs = await db_service.get_recent(limit)
-                        else:
-                            with open(OPP_LOG_FILE, "r") as f:
-                                q = collections.deque(f, limit)
-                            reader = csv.DictReader(q, fieldnames=OPP_COLUMNS)
-                            logs = list(reader)
-                            if logs and logs[0].get("timestamp_utc") == "timestamp_utc":
-                                logs.pop(0)
+                        logs = await db_service.get_recent(limit)
                         await websocket.send(json.dumps({
                             "type": "recent_opportunities",
                             "data": logs
@@ -831,8 +694,6 @@ async def main(threshold: float, port: int = 8765):
 
     # ── Initialize TimescaleDB connection pool ─────────────────
     await tsdb.init_db()
-    db_write = tsdb.is_db_write_enabled()
-    db_read = tsdb.is_db_read_enabled()
 
     # ── Start WebSocket broadcast server ───────────────────────
     server = await websockets.serve(ws_handler, "127.0.0.1", port)
@@ -840,8 +701,7 @@ async def main(threshold: float, port: int = 8765):
     print(f"[ws_server] Subscribing to orderbooks on {', '.join(ENABLED_EXCHANGES)}...")
     print(f"[ws_server] Exchange pairs: {len(EXCHANGE_PAIRS)} ({', '.join(f'{a}↔{b}' for a, b in EXCHANGE_PAIRS)})")
     print(f"[ws_server] Threshold: {threshold}%  |  Broadcast: {int(1/WS_BROADCAST_INTERVAL)}fps")
-    print(f"[ws_server] Opportunity log: {OPP_LOG_FILE}")
-    print(f"[ws_server] TimescaleDB: write={'ON' if db_write else 'OFF'} read={'ON' if db_read else 'OFF'}")
+    print(f"[ws_server] Storage: TimescaleDB")
 
     # ── Launch orderbook feeds ─────────────────────────────────
     for ex_name in ENABLED_EXCHANGES:
@@ -911,7 +771,7 @@ async def main(threshold: float, port: int = 8765):
             b = state.opp_best.get(t, 0)
             if c > 0:
                 print(f"    {t:<8}: {c:>4} opps  |  best net: {b:+.3f}%")
-        print(f"  Log file       : {OPP_LOG_FILE}")
+        print(f"  Storage        : TimescaleDB")
         print(f"{'═' * 60}")
         print(f"Server stopped cleanly.")
 

@@ -43,26 +43,13 @@ def _get_config() -> dict:
     }
 
 
-def is_db_write_enabled() -> bool:
-    """Check if dual-write to TimescaleDB is enabled."""
-    return os.getenv("DB_WRITE_ENABLED", "false").lower() in ("true", "1", "yes")
-
-
-def is_db_read_enabled() -> bool:
-    """Check if reads should come from TimescaleDB instead of CSV."""
-    return os.getenv("DB_READ_ENABLED", "false").lower() in ("true", "1", "yes")
-
-
 async def init_db() -> Optional[asyncpg.Pool]:
     """
     Initialize the asyncpg connection pool.
-    Returns the pool, or None if DB is not configured/available.
+    Returns the pool, or None if DB is not available.
     """
     global _pool
 
-    if not is_db_write_enabled() and not is_db_read_enabled():
-        print("[db] TimescaleDB disabled (DB_WRITE_ENABLED=false, DB_READ_ENABLED=false)")
-        return None
 
     config = _get_config()
     try:
