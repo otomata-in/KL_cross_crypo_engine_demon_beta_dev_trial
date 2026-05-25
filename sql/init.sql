@@ -38,3 +38,44 @@ CREATE INDEX IF NOT EXISTS idx_opp_route
 -- Index: net spread filtering (find profitable opportunities fast)
 CREATE INDEX IF NOT EXISTS idx_opp_net_spread
     ON opportunities (net_spread DESC, timestamp_utc DESC);
+
+-- ============================================================
+-- Orders Table — Trade Execution Tracking
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS orders (
+    created_at    TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ,
+    order_id      VARCHAR(20)       NOT NULL,
+    trade_id      VARCHAR(20)       NOT NULL DEFAULT '',
+    exchange      VARCHAR(12)       NOT NULL,
+    side          VARCHAR(4)        NOT NULL,   -- 'buy' or 'sell'
+    symbol        VARCHAR(20)       NOT NULL,   -- e.g. "SOL/USDT"
+    qty           DOUBLE PRECISION  NOT NULL,
+    price         DOUBLE PRECISION  NOT NULL,
+    status        VARCHAR(10)       NOT NULL DEFAULT 'pending',
+    filled_qty    DOUBLE PRECISION  NOT NULL DEFAULT 0,
+    filled_price  DOUBLE PRECISION  NOT NULL DEFAULT 0,
+    fee           DOUBLE PRECISION  NOT NULL DEFAULT 0,
+    net_pnl       DOUBLE PRECISION,
+    is_mock       BOOLEAN           NOT NULL DEFAULT TRUE,
+    error         TEXT
+);
+
+-- Convert to hypertable (7-day chunks)
+SELECT create_hypertable('orders', 'created_at',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists => TRUE
+);
+
+-- Index: order lookup by order_id
+CREATE INDEX IF NOT EXISTS idx_order_id
+    ON orders (order_id);
+
+-- Index: trade correlation (find both legs of a trade)
+CREATE INDEX IF NOT EXISTS idx_order_trade_id
+    ON orders (trade_id, created_at DESC);
+
+-- Index: open orders
+CREATE INDEX IF NOT EXISTS idx_order_status
+    ON orders (status, created_at DESC);

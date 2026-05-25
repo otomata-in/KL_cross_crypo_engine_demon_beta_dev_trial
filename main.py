@@ -1,235 +1,154 @@
 """
-main.py — PAAL-V2 Orchestrator
-Starts the event loop, wires all modules, handles graceful shutdown.
-MOCK_MODE and LIVE mode are fully controlled by config.MOCK_MODE.
+main.py — Unified Pippin Arbitrage Bot Entrypoint
+===================================================
+Initializes the database, connects to exchange plugins,
+and starts the WebSocket server + opportunity detector.
 """
+
 import asyncio
-import signal
-import time
 import sys
-import logging
-import structlog
 
-from config import cfg
-from engine.scanner  import Scanner
-from engine.logic    import Logic, DailyLossCapHit, ConsecutiveLossPause
-from engine.executor import Executor
-from engine.state    import sm, TradeState
-from utils.notifier  import notify, notify_startup, notify_shutdown, notify_daily_summary
-from utils.fee_ledger  import fee_ledger
-from utils.rebalancer  import Rebalancer
-from utils.logger      import trade_logger
-
-# ── Structlog setup ──────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-structlog.configure(
-    processors=[
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.stdlib.BoundLogger,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-)
-log = structlog.get_logger(__name__)
+from app.config import get_config
+from app.db import init_db, close_db
+from app.engine.state import get_state
+from app.engine.detector import OpportunityDetector
+from app.exchanges.registry import ExchangeRegistry
+from app.transport.ws_server import WebSocketServer
+from app.lib.logger import setup_logging
 
 
-class PAALV2:
+async def main(threshold: float, port: int):
+    # Setup structured logging
+    setup_logging()
 
-    def __init__(self) -> None:
-        self._scanner    = Scanner()
-        self._logic      = Logic(self._scanner)
-        self._executor   = Executor(self._scanner)
-        self._rebalancer = Rebalancer(
-            mock_buy_ex  = self._executor._buy_ex  if cfg.MOCK_MODE else None,
-            mock_sell_ex = self._executor._sell_ex if cfg.MOCK_MODE else None,
-        )
-        self._running       = False
-        self._total_capital = cfg.STARTING_CAPITAL
-        self._last_summary  = time.monotonic()
+    # Load config and override from args
+    cfg = get_config()
+    cfg.DEFAULT_THRESHOLD = threshold
+    cfg.WS_PORT = port
 
-    # ── Startup / shutdown ───────────────────────────────────────
+    print("\n" + "═" * 60)
+    print("  PAAL-V2: Multi-Exchange Arbitrage Engine")
+    print("═" * 60)
+    print(f"  Mode      : {'PAPER TRADING (mock)' if cfg.MOCK_MODE else 'LIVE TRADING'}")
+    print(f"  Threshold : {cfg.DEFAULT_THRESHOLD}%")
+    print(f"  Storage   : TimescaleDB")
 
-    async def run(self) -> None:
-        self._running = True
+    # 1. Initialize Database
+    pool = await init_db()
+    if pool is None:
+        print("[main] FATAL: Could not connect to TimescaleDB. Exiting.")
+        return
 
-        mode = "MOCK (paper trading)" if cfg.MOCK_MODE else "LIVE (real money)"
-        log.info("paal_v2_starting",
-                 mode=mode,
-                 symbol=cfg.SYMBOL,
-                 capital=cfg.STARTING_CAPITAL,
-                 trigger=cfg.TRIGGER_THRESHOLD)
+    # 2. Load and connect exchange plugins
+    registry = ExchangeRegistry()
+    registry.load_from_config()
+    print(f"  Exchanges : {', '.join(registry.list_enabled())}")
+    
+    await registry.initialize_all()
 
-        await notify_startup()
+    # Share active tokens with state
+    state = get_state()
+    for ex_name, plugin in registry.plugins.items():
+        state.supported_tokens[ex_name] = {
+            t for t in state.tokens if plugin.has_pair(t)
+        }
+        print(f"  [{ex_name}] : {len(state.supported_tokens[ex_name])}/{len(state.tokens)} tokens supported")
 
-        # Register OS signal handlers for graceful shutdown
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(
-                sig,
-                lambda s=sig: asyncio.create_task(self._shutdown(str(s)))
-            )
+    # 3. Setup Detector & WebSocket Server
+    # Pass ws server's broadcast function to detector so it can emit events
+    ws_server = WebSocketServer(detector=None) # We'll set detector after init
+    detector = OpportunityDetector(broadcast_callback=ws_server.broadcast_opportunity)
+    ws_server.detector = detector
 
-        # Start background tasks
-        await asyncio.gather(
-            self._scanner.start(),
-            fee_ledger.refresh_loop(),
-            self._main_loop(),
-            self._rebalance_loop(),
-            self._summary_loop(),
-        )
+    print("═" * 60)
 
-    async def _shutdown(self, reason: str = "user request") -> None:
-        if not self._running:
-            return
-        self._running = False
-        log.info("shutdown_initiated", reason=reason)
+    # 4. Start concurrent tasks
+    tasks = []
+    
+    # WebSocket Server
+    tasks.append(asyncio.create_task(ws_server.start()))
+    
+    # Opportunity Detector Loop
+    tasks.append(asyncio.create_task(detector.run()))
 
-        # If mid-trade, attempt emergency hedge
-        state = sm.state
-        if state in (TradeState.LEG1_OPEN, TradeState.LEG2_OPEN):
-            log.warning("shutdown_mid_trade_hedging")
-            await notify("SHUTDOWN mid-trade — emergency hedging", urgent=True)
-            # Give executor 10s to hedge
-            await asyncio.sleep(10)
+    # Orderbook feed loops for each plugin
+    for name, plugin in registry.plugins.items():
+        if hasattr(plugin, "watch_orderbook"):
+            for token in state.tokens:
+                if token in state.supported_tokens[name]:
+                    symbol = plugin.build_symbol(token)
+                    tasks.append(asyncio.create_task(_watch_feed(plugin, token, symbol)))
 
-        await self._scanner.stop()
-        summary = trade_logger.daily_summary()
-        await notify_daily_summary(summary)
-        await notify_shutdown(reason)
-        await sm.transition(TradeState.SHUTDOWN)
-        log.info("shutdown_complete")
-        sys.exit(0)
+    # USDT/USDC Peg Tracker (use Binance if available)
+    if "binance" in registry.plugins:
+        tasks.append(asyncio.create_task(_watch_peg(registry.plugins["binance"])))
 
-    # ── Main trading loop ─────────────────────────────────────────
+    try:
+        await asyncio.gather(*tasks)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n[main] Shutting down...")
+        detector.stop()
+        for task in tasks:
+            task.cancel()
+        
+        await registry.close_all()
+        await close_db()
+        print("[main] Server stopped cleanly.")
 
-    async def _main_loop(self) -> None:
-        log.info("main_loop_started")
-        while self._running:
+
+async def _watch_feed(plugin, token: str, symbol: str):
+    """Feed watcher wrapper."""
+    state = get_state()
+    while True:
+        try:
+            ob = await plugin.watch_orderbook(token, symbol)
+            if ob and ob.get("bid") is not None:
+                state.exchanges[plugin.name][token] = ob
+                state.ws_status[plugin.name][token] = "connected"
+                state.update_count[plugin.name] += 1
+            else:
+                state.ws_status[plugin.name][token] = "error:no_data"
+        except Exception as e:
+            err_msg = str(e)[:30]
+            state.ws_status[plugin.name][token] = f"error:{err_msg}"
+            await asyncio.sleep(2)
+
+
+async def _watch_peg(binance_plugin):
+    """USDT/USDC peg tracker."""
+    state = get_state()
+    exchange = binance_plugin.exchange_obj
+    while True:
+        try:
+            ticker = await exchange.watch_ticker("USDT/USDC")
+            if ticker and ticker.get("last"):
+                state.usdt_usdc_rate = float(ticker["last"])
+        except Exception:
             try:
-                # Wait for scanner to warm up
-                await asyncio.sleep(0.1)
+                ticker = await exchange.watch_ticker("USDC/USDT")
+                if ticker and ticker.get("last"):
+                    state.usdt_usdc_rate = 1.0 / float(ticker["last"])
+            except Exception:
+                state.usdt_usdc_rate = 1.0
+                await asyncio.sleep(5)
 
-                # Kill switch — check total capital
-                if not await self._kill_switch_ok():
-                    await self._shutdown("KILL_SWITCH_TRIGGERED")
-                    return
-
-                # Get spread from scanner
-                spread = self._scanner.get_spread()
-
-                # Evaluate through logic filters
-                signal = self._logic.evaluate(spread)
-
-                if signal is None:
-                    continue
-
-                # Execute trade (mock or live)
-                result = await self._executor.execute(signal)
-
-                if result and result.get("net_pnl") is not None:
-                    try:
-                        self._logic.session.record(result["net_pnl"])
-                    except DailyLossCapHit as e:
-                        log.error("daily_loss_cap", error=str(e))
-                        await notify(str(e), urgent=True)
-                        await self._shutdown("DAILY_LOSS_CAP")
-                        return
-                    except ConsecutiveLossPause as e:
-                        log.warning("consec_pause", error=str(e))
-                        await notify(str(e))
-                        await sm.transition(TradeState.PAUSED)
-                        await asyncio.sleep(cfg.PAUSE_MINUTES * 60)
-                        await sm.transition(TradeState.IDLE)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                log.error("main_loop_error", error=str(exc))
-                await notify(f"Main loop error: {exc}", urgent=True)
-                await asyncio.sleep(1)
-
-    # ── Rebalance loop ────────────────────────────────────────────
-
-    async def _rebalance_loop(self) -> None:
-        await asyncio.sleep(30)  # let scanner warm up first
-        while self._running:
-            try:
-                await self._rebalancer.check_and_rebalance()
-            except Exception as exc:
-                log.error("rebalance_loop_error", error=str(exc))
-            await asyncio.sleep(60)  # check every 60s
-
-    # ── Summary loop (every hour) ─────────────────────────────────
-
-    async def _summary_loop(self) -> None:
-        while self._running:
-            await asyncio.sleep(3600)
-            summary = trade_logger.daily_summary()
-            log.info("hourly_summary", **summary)
-            await notify_daily_summary(summary)
-
-    # ── Kill switch ───────────────────────────────────────────────
-
-    async def _kill_switch_ok(self) -> bool:
-        """
-        In MOCK_MODE: uses virtual wallet balances.
-        In LIVE mode: fetches real balances from both exchanges.
-        """
-        if cfg.MOCK_MODE:
-            # Sum mock wallet values using last known mid price
-            spread = self._scanner.get_spread()
-            if spread is None:
-                return True  # can't evaluate — don't kill
-            mid = (spread["binance_bid"] + spread["binance_ask"]) / 2
-            ex_b = self._executor._buy_ex
-            ex_m = self._executor._sell_ex
-            total = (ex_b.total_virtual_value(mid) +
-                     ex_m.total_virtual_value(mid))
-        else:
-            try:
-                import ccxt.async_support as ccxt
-                binance = ccxt.binance({"apiKey": cfg.API_KEY_BINANCE, "secret": cfg.API_SECRET_BINANCE})
-                mexc    = ccxt.mexc({"apiKey": cfg.API_KEY_BACKPACK, "secret": cfg.API_SECRET_BACKPACK})
-                b_bal   = await binance.fetch_balance()
-                m_bal   = await mexc.fetch_balance()
-                await binance.close()
-                await mexc.close()
-                spread  = self._scanner.get_spread()
-                mid     = (spread["binance_bid"] + spread["binance_ask"]) / 2 if spread else 0
-                pippin_b = float(b_bal.get(cfg.BASE_ASSET, {}).get("free", 0))
-                pippin_m = float(m_bal.get(cfg.BASE_ASSET, {}).get("free", 0))
-                usdt_b   = float(b_bal["USDT"]["free"])
-                usdt_m   = float(m_bal["USDT"]["free"])
-                total    = usdt_b + usdt_m + (pippin_b + pippin_m) * mid
-            except Exception as exc:
-                log.error("kill_switch_balance_check_failed", error=str(exc))
-                return True  # don't kill on check failure
-
-        if total < cfg.KILL_SWITCH_BALANCE:
-            log.error("kill_switch_triggered",
-                      total=round(total, 2),
-                      floor=cfg.KILL_SWITCH_BALANCE,
-                      mock=cfg.MOCK_MODE)
-            await notify(
-                f"KILL SWITCH TRIGGERED\n"
-                f"Total capital: ${total:.2f} < floor ${cfg.KILL_SWITCH_BALANCE}",
-                urgent=True,
-            )
-            return False
-        return True
-
-
-# ── Entry point ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Pippin Arbitrage Bot")
+    parser.add_argument("--threshold", type=float, default=0.001, help="Minimum net spread % to trigger opportunity")
+    parser.add_argument("--port", type=int, default=8765, help="WebSocket server port")
+    args = parser.parse_args()
+
     try:
         import uvloop
         uvloop.install()
-        log.info("uvloop_installed")
     except ImportError:
-        log.info("uvloop_not_available_using_default")
+        pass
 
-    bot = PAALV2()
-    asyncio.run(bot.run())
+    try:
+        asyncio.run(main(args.threshold, args.port))
+    except KeyboardInterrupt:
+        print("\n[main] Execution stopped.")
