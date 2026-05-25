@@ -130,6 +130,24 @@ export interface ConsistencyRow {
   observations: number;
 }
 
+export interface TradeHistoryRecord {
+  trade_id: string;
+  trade_time: string;
+  ex_buy: string;
+  ex_sell: string;
+  buy_status: string;
+  sell_status: string;
+  buy_qty: number;
+  sell_qty: number;
+  buy_value: number;
+  sell_value: number;
+  total_fees: number;
+  net_pnl: number;
+  is_mock: boolean;
+  token?: string;
+  route?: string;
+}
+
 export interface TradeGroup {
   trade_id: string;
   token: string;

@@ -17,17 +17,43 @@ import structlog
 
 logger = structlog.get_logger("rebalancer")
 
-async def check_inventory_skew() -> None:
+async def trigger_mock_rebalance(token: str, ex_buy: str, ex_sell: str) -> None:
     """
-    Periodically checks the balance dictionary in LiveState.
-    If an exchange holds < 20% of the total pool of an asset,
-    a rebalance transfer is initiated.
+    Calculates deficit and triggers transfers to restore exactly $250 / 50% split.
     """
     state = get_state()
-    # Mocking total pool logic for demonstration
-    # In reality, you'd iterate through state.balances
     
-    pass
+    # 1. Rebalance USDT to $250 each
+    buy_usdt = state.balances[ex_buy].get("USDT", 250.0)
+    sell_usdt = state.balances[ex_sell].get("USDT", 250.0)
+    total_usdt = buy_usdt + sell_usdt
+    target_usdt = total_usdt / 2.0
+    
+    usdt_diff = target_usdt - buy_usdt
+    if abs(usdt_diff) > 1.0: # threshold to avoid tiny dust transfers
+        source_ex = ex_sell if usdt_diff > 0 else ex_buy
+        dest_ex = ex_buy if usdt_diff > 0 else ex_sell
+        
+        await execute_solana_transfer("USDT", abs(usdt_diff), source_ex, dest_ex, mock=True)
+        # Apply mock transfer to local state
+        state.balances[source_ex]["USDT"] -= abs(usdt_diff)
+        state.balances[dest_ex]["USDT"] += abs(usdt_diff)
+        
+    # 2. Rebalance Base Token to 50% each
+    buy_token = state.balances[ex_buy].get(token, 250.0)
+    sell_token = state.balances[ex_sell].get(token, 250.0)
+    total_token = buy_token + sell_token
+    target_token = total_token / 2.0
+    
+    token_diff = target_token - buy_token
+    if abs(token_diff) > 0.001:
+        source_ex = ex_sell if token_diff > 0 else ex_buy
+        dest_ex = ex_buy if token_diff > 0 else ex_sell
+        
+        await execute_solana_transfer(token, abs(token_diff), source_ex, dest_ex, mock=True)
+        # Apply mock transfer to local state
+        state.balances[source_ex][token] -= abs(token_diff)
+        state.balances[dest_ex][token] += abs(token_diff)
 
 async def execute_solana_transfer(
     asset: str,

@@ -145,13 +145,19 @@ async def get_recent_trades(limit: int = 50) -> List[dict]:
         """
         SELECT trade_id,
                MIN(created_at) AS trade_time,
+               MAX(CASE WHEN side = 'buy' THEN exchange END) AS ex_buy,
+               MAX(CASE WHEN side = 'sell' THEN exchange END) AS ex_sell,
+               MAX(CASE WHEN side = 'buy' THEN status END) AS buy_status,
+               MAX(CASE WHEN side = 'sell' THEN status END) AS sell_status,
                SUM(CASE WHEN side = 'buy' THEN filled_qty * filled_price ELSE 0 END) AS buy_value,
                SUM(CASE WHEN side = 'sell' THEN filled_qty * filled_price ELSE 0 END) AS sell_value,
+               SUM(CASE WHEN side = 'buy' THEN filled_qty ELSE 0 END) AS buy_qty,
+               SUM(CASE WHEN side = 'sell' THEN filled_qty ELSE 0 END) AS sell_qty,
                SUM(fee) AS total_fees,
                MAX(net_pnl) AS net_pnl,
                BOOL_AND(is_mock) AS is_mock
         FROM orders
-        WHERE status IN ('filled', 'partial')
+        WHERE status IN ('filled', 'partial', 'pending', 'open', 'failed')
           AND trade_id != ''
         GROUP BY trade_id
         ORDER BY trade_time DESC

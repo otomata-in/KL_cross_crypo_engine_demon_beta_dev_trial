@@ -43,7 +43,15 @@ class LiveState:
         # Trading Control
         self.auto_trade_enabled: bool = False
         self.is_pro_mode: bool = False
-        self.balances: Dict[str, Dict[str, float]] = {ex: {} for ex in self.enabled_exchanges}
+        
+        self.balances: Dict[str, Dict[str, float]] = {}
+        for ex in self.enabled_exchanges:
+            self.balances[ex] = {"USDT": 250.0}
+            for t in self.tokens:
+                # We initialize with a nominal token amount. 
+                # In split_wallet, it will be accurately pegged to $250 value.
+                self.balances[ex][t] = 250.0 
+                
         self.active_trades: Dict[str, dict] = {}
 
 

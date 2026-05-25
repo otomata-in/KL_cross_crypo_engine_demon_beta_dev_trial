@@ -130,8 +130,28 @@ async def execute_simultaneous_arb(
         fees = buy_result.fee + sell_result.fee
         net_pnl = sell_value - buy_value - fees
         
+        # Update Mock Balances
+        if mock:
+            state.balances[ex_buy]["USDT"] -= buy_value
+            state.balances[ex_buy][token] += buy_result.filled_qty
+            
+            state.balances[ex_sell]["USDT"] += sell_value
+            state.balances[ex_sell][token] -= sell_result.filled_qty
+        
         logger.info(f"[{trade_id}] SPLIT-WALLET ARB SUCCESS! PnL: +{net_pnl:.2f} USDT")
         await update_trade_group_status(trade_id, "completed", net_pnl)
+        
+        # Check for 20% Imbalance Trigger
+        if mock:
+            buy_usdt = state.balances[ex_buy].get("USDT", 250.0)
+            sell_usdt = state.balances[ex_sell].get("USDT", 250.0)
+            total_usdt = buy_usdt + sell_usdt
+            if total_usdt > 0:
+                imbalance = abs(buy_usdt - sell_usdt) / total_usdt
+                if imbalance >= 0.20:
+                    logger.warning(f"[{trade_id}] 20% IMBALANCE REACHED ({ex_buy}: {buy_usdt:.2f}, {ex_sell}: {sell_usdt:.2f}). Triggering rebalancer!")
+                    from app.execution.rebalancer import trigger_mock_rebalance
+                    asyncio.create_task(trigger_mock_rebalance(token, ex_buy, ex_sell))
         
     # Cleanup state
     if trade_id in state.active_trades:

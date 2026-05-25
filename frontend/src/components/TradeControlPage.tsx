@@ -225,8 +225,9 @@ export const TradeControlPage: React.FC = () => {
             <thead className="text-xs uppercase bg-surface/50 text-gray-500">
               <tr>
                 <th className="px-6 py-3">Time</th>
-                <th className="px-6 py-3">Mode</th>
-                <th className="px-6 py-3 text-right">Volume</th>
+                <th className="px-6 py-3">Route & Status</th>
+                <th className="px-6 py-3">Leg Values</th>
+                <th className="px-6 py-3">Wallet Deltas</th>
                 <th className="px-6 py-3 text-right">Fees</th>
                 <th className="px-6 py-3 text-right">Net PnL</th>
               </tr>
@@ -234,7 +235,7 @@ export const TradeControlPage: React.FC = () => {
             <tbody>
               {!tradeState?.history || tradeState.history.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                  <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
                     No completed trades yet.
                   </td>
                 </tr>
@@ -242,17 +243,45 @@ export const TradeControlPage: React.FC = () => {
                 tradeState.history.map((t, idx) => (
                   <tr key={idx} className="border-b border-border/50 hover:bg-surface/30 transition-colors">
                     <td className="px-6 py-3 text-xs text-gray-400">
-                      {new Date(t.trade_time).toLocaleTimeString()}
+                      <div className="flex flex-col gap-1">
+                        <span>{new Date(t.trade_time).toLocaleTimeString()}</span>
+                        {t.is_mock ? (
+                          <span className="text-[9px] uppercase font-bold text-gray-500 bg-gray-500/10 px-1 py-0.5 rounded w-fit">Mock</span>
+                        ) : (
+                          <span className="text-[9px] uppercase font-bold text-red-400 bg-red-400/10 px-1 py-0.5 rounded border border-red-500/30 w-fit">Pro</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-3">
-                      {t.is_mock ? (
-                        <span className="text-[10px] uppercase font-bold text-gray-500 bg-gray-500/10 px-2 py-0.5 rounded">Mock</span>
-                      ) : (
-                        <span className="text-[10px] uppercase font-bold text-red-400 bg-red-400/10 px-2 py-0.5 rounded border border-red-500/30">Pro</span>
-                      )}
+                      <div className="flex flex-col gap-1">
+                        <span className="font-bold text-gray-300 text-xs">
+                          {t.ex_buy} ➡️ {t.ex_sell}
+                        </span>
+                        <div className="flex gap-2 text-[10px] font-mono">
+                           <span className={t.buy_status === 'filled' ? 'text-green-400' : 'text-yellow-500'}>
+                             BUY: {t.buy_status || 'N/A'}
+                           </span>
+                           <span className={t.sell_status === 'filled' ? 'text-green-400' : 'text-yellow-500'}>
+                             SELL: {t.sell_status || 'N/A'}
+                           </span>
+                        </div>
+                      </div>
                     </td>
-                    <td className="px-6 py-3 text-right font-mono text-gray-300">
-                      ${t.buy_value.toFixed(2)}
+                    <td className="px-6 py-3">
+                      <div className="flex flex-col gap-1 text-xs font-mono">
+                        <span className="text-gray-400">Buy: ${t.buy_value?.toFixed(2)}</span>
+                        <span className="text-gray-400">Sell: ${t.sell_value?.toFixed(2)}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-3">
+                      <div className="flex flex-col gap-1 text-[10px] font-mono">
+                        <span className="text-gray-400">
+                          <span className="text-red-400">-${t.buy_value?.toFixed(2)} USDT</span> | <span className="text-green-400">+{t.buy_qty?.toFixed(2)} TKN</span> ({t.ex_buy})
+                        </span>
+                        <span className="text-gray-400">
+                          <span className="text-green-400">+${t.sell_value?.toFixed(2)} USDT</span> | <span className="text-red-400">-{t.sell_qty?.toFixed(2)} TKN</span> ({t.ex_sell})
+                        </span>
+                      </div>
                     </td>
                     <td className="px-6 py-3 text-right font-mono text-red-400">
                       -${t.total_fees.toFixed(3)}
