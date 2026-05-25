@@ -3,7 +3,7 @@ venv/
 
 # Environment variables
 .env
-.env.*
+!.env.example
 
 # Byte-compiled / optimized
 __pycache__/

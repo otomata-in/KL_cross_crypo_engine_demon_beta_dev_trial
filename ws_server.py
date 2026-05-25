@@ -28,6 +28,10 @@ from dotenv import load_dotenv
 
 from adapters.dextrade_adapter import DexTradeAdapter
 
+# TimescaleDB integration (shadow mode)
+import db as tsdb
+import db_service
+
 # Load environment variables from .env
 load_dotenv()
 
@@ -407,6 +411,13 @@ async def opportunity_detector():
                     }
                     await opp_logger.log(record)
 
+                    # Shadow write: also insert into TimescaleDB
+                    if tsdb.is_db_write_enabled():
+                        try:
+                            await db_service.insert_opportunity(record)
+                        except Exception as db_err:
+                            print(f"[ws_server] DB write error (non-fatal): {db_err}")
+
                     if connected_clients:
                         try:
                             new_opp = json.dumps({"type": "new_opportunity", "data": record})
@@ -492,7 +503,11 @@ def run_analytics() -> dict:
     }
 
 async def handle_analytics(websocket):
-    analytics = await asyncio.to_thread(run_analytics)
+    # Feature flag: read from TimescaleDB or CSV
+    if tsdb.is_db_read_enabled():
+        analytics = await db_service.run_analytics_db()
+    else:
+        analytics = await asyncio.to_thread(run_analytics)
     try:
         await websocket.send(json.dumps({
             "type": "analytics_data",
@@ -506,6 +521,10 @@ async def reset_logs(websocket):
         with open(OPP_LOG_FILE, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=OPP_COLUMNS)
             writer.writeheader()
+        
+        # Also truncate TimescaleDB
+        if tsdb.is_db_write_enabled():
+            await db_service.reset_opportunities()
         
         state.opp_total = 0
         state.opp_count = {t: 0 for t in TOKENS}
@@ -544,12 +563,16 @@ async def ws_handler(websocket):
                 elif msg.get("type") == "get_recent_opportunities":
                     limit = min(200, max(1, int(msg.get("limit", 100))))
                     try:
-                        with open(OPP_LOG_FILE, "r") as f:
-                            q = collections.deque(f, limit)
-                        reader = csv.DictReader(q, fieldnames=OPP_COLUMNS)
-                        logs = list(reader)
-                        if logs and logs[0].get("timestamp_utc") == "timestamp_utc":
-                            logs.pop(0)
+                        # Feature flag: read from TimescaleDB or CSV
+                        if tsdb.is_db_read_enabled():
+                            logs = await db_service.get_recent(limit)
+                        else:
+                            with open(OPP_LOG_FILE, "r") as f:
+                                q = collections.deque(f, limit)
+                            reader = csv.DictReader(q, fieldnames=OPP_COLUMNS)
+                            logs = list(reader)
+                            if logs and logs[0].get("timestamp_utc") == "timestamp_utc":
+                                logs.pop(0)
                         await websocket.send(json.dumps({
                             "type": "recent_opportunities",
                             "data": logs
@@ -806,6 +829,11 @@ async def main(threshold: float, port: int = 8765):
         state.supported_tokens["dextrade"] = available_tokens
         print(f"[ws_server] dextrade: {len(available_tokens)}/{len(TOKENS)} tokens available")
 
+    # ── Initialize TimescaleDB connection pool ─────────────────
+    await tsdb.init_db()
+    db_write = tsdb.is_db_write_enabled()
+    db_read = tsdb.is_db_read_enabled()
+
     # ── Start WebSocket broadcast server ───────────────────────
     server = await websockets.serve(ws_handler, "127.0.0.1", port)
     print(f"[ws_server] ⚡ WebSocket server running on ws://127.0.0.1:{port}")
@@ -813,6 +841,7 @@ async def main(threshold: float, port: int = 8765):
     print(f"[ws_server] Exchange pairs: {len(EXCHANGE_PAIRS)} ({', '.join(f'{a}↔{b}' for a, b in EXCHANGE_PAIRS)})")
     print(f"[ws_server] Threshold: {threshold}%  |  Broadcast: {int(1/WS_BROADCAST_INTERVAL)}fps")
     print(f"[ws_server] Opportunity log: {OPP_LOG_FILE}")
+    print(f"[ws_server] TimescaleDB: write={'ON' if db_write else 'OFF'} read={'ON' if db_read else 'OFF'}")
 
     # ── Launch orderbook feeds ─────────────────────────────────
     for ex_name in ENABLED_EXCHANGES:
@@ -858,6 +887,9 @@ async def main(threshold: float, port: int = 8765):
         server.close()
         for task in tasks:
             task.cancel()
+
+        # Close TimescaleDB connection pool
+        await tsdb.close_db()
 
         # Close all exchange connections
         for name, obj in exchange_objects.items():
