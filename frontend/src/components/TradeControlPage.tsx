@@ -7,7 +7,7 @@ import {
   ShieldAlert, 
   Activity,
   ArrowRightLeft,
-  CheckCircle2
+  CheckCircle
 } from 'lucide-react';
 
 export const TradeControlPage: React.FC = () => {
@@ -260,7 +260,7 @@ export const TradeControlPage: React.FC = () => {
                     <td className="px-6 py-3 text-right">
                       {t.net_pnl > 0 ? (
                         <span className="text-green-400 font-bold font-mono flex items-center justify-end gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
+                          <CheckCircle className="w-3 h-3" />
                           +${t.net_pnl.toFixed(3)}
                         </span>
                       ) : (
