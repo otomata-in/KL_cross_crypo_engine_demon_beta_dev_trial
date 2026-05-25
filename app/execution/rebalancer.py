@@ -13,9 +13,9 @@ from typing import Optional
 from app.engine.state import get_state
 from app.db.order_repo import insert_rebalance_transfer
 from app.models.order import RebalanceTransfer
-from app.lib.logger import get_logger
+import structlog
 
-logger = get_logger("rebalancer")
+logger = structlog.get_logger("rebalancer")
 
 async def check_inventory_skew() -> None:
     """

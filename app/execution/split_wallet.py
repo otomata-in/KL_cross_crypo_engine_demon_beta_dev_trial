@@ -15,9 +15,9 @@ from app.config import get_config
 from app.engine.state import get_state
 from app.db.order_repo import insert_trade_group, update_trade_group_status, insert_order, update_status
 from app.models.order import Order, OrderSide, OrderStatus, TradeGroup
-from app.lib.logger import get_logger
+import structlog
 
-logger = get_logger("split_wallet")
+logger = structlog.get_logger("split_wallet")
 
 async def execute_simultaneous_arb(
     token: str,
