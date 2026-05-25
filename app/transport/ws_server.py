@@ -9,6 +9,7 @@ import asyncio
 import json
 import websockets
 from typing import Set, Any
+from datetime import datetime, timezone
 
 from app.config import get_config
 from app.engine.state import get_state
@@ -29,6 +30,9 @@ class WebSocketServer:
 
     async def start(self) -> None:
         """Start the WebSocket server."""
+        # Restore wallet balances from DB before accepting connections
+        await self.state.restore_balances_from_db()
+        
         server = await websockets.serve(self._ws_handler, "127.0.0.1", self.cfg.WS_PORT)
         print(f"[transport] ⚡ WebSocket server running on ws://127.0.0.1:{self.cfg.WS_PORT}")
         
@@ -104,6 +108,24 @@ class WebSocketServer:
                             "data": consistency
                         }))
 
+                    elif msg_type == "get_pnl_analytics":
+                        from app.db.order_repo import get_pnl_analytics
+                        timeframe = msg.get("timeframe", "all")
+                        exchange_filter = msg.get("exchange", "all")
+                        
+                        start_time = None
+                        if timeframe == "session":
+                            # Use state.started_at (unix timestamp) converted to datetime
+                            start_time = datetime.fromtimestamp(self.state.started_at, tz=timezone.utc)
+                            
+                        data = await get_pnl_analytics(timeframe, exchange_filter, start_time)
+                        await websocket.send(json.dumps({
+                            "type": "pnl_analytics_data",
+                            "data": data,
+                            "timeframe": timeframe,
+                            "exchange": exchange_filter
+                        }))
+
                     elif msg_type == "toggle_autotrader":
                         self.state.auto_trade_enabled = bool(msg.get("enabled", False))
                         websockets.broadcast(self.connected_clients, json.dumps({
@@ -127,18 +149,33 @@ class WebSocketServer:
                         }))
                         
                     elif msg_type == "get_trade_state":
-                        from app.db.order_repo import get_recent_trades, get_active_rebalances
+                        from app.db.order_repo import get_recent_trades, get_active_rebalances, get_recent_rebalances
                         trades = await get_recent_trades(50)
                         rebalances = await get_active_rebalances()
+                        rebalance_history = await get_recent_rebalances(20)
+                        
+                        # Merge trades and rebalance events, sort by time
+                        all_entries = trades + rebalance_history
+                        all_entries.sort(key=lambda x: x.get("trade_time", ""), reverse=True)
+                        
                         await websocket.send(json.dumps({
                             "type": "trade_state_data",
                             "data": {
                                 "active_trades": list(self.state.active_trades.values()),
-                                "history": trades,
-                                "rebalances": rebalances
+                                "history": all_entries[:50],
+                                "rebalances": rebalances,
+                                "balances": self.state.balances
                             }
                         }))
                         
+                    elif msg_type == "reset_mock_wallets":
+                        self.state.auto_trade_enabled = False
+                        await self.state.reset_mock_wallets()
+                        websockets.broadcast(self.connected_clients, json.dumps({
+                            "type": "mock_wallets_reset",
+                            "balances": self.state.balances
+                        }))
+
                     elif msg_type == "reset_logs":
                         await opportunity_repo.reset()
                         

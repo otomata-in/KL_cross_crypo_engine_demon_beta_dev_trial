@@ -146,6 +146,7 @@ export interface TradeHistoryRecord {
   is_mock: boolean;
   token?: string;
   route?: string;
+  is_rebalance?: boolean;
 }
 
 export interface TradeGroup {
@@ -174,8 +175,15 @@ export interface RebalanceTransfer {
 
 export interface TradeStateData {
   active_trades: TradeGroup[];
-  history: any[]; // Using any for simplicity right now
+  history: any[];
   rebalances: RebalanceTransfer[];
+  balances?: Record<string, Record<string, number>>;
 }
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
+
+export interface PnLAnalyticsData {
+  token: string;
+  total_pnl: number;
+  trade_count: number;
+}

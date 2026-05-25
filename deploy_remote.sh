@@ -8,6 +8,7 @@ python3 -m pip install -r requirements.txt || python3 -m pip install -r requirem
 
 echo "Building frontend..."
 cd frontend
+rm -f .env.local  # Ensure production build uses dynamic WS URL
 npm install
 npm run build
 cd ..

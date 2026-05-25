@@ -47,9 +47,20 @@ async def execute_simultaneous_arb(
     trade_id = str(uuid.uuid4())[:12]
     
     # 1. Position Sizing (5% of split wallet)
-    # Mocking $500 total capital ($250 USDT on buy side, $250 worth of tokens on sell side)
+    # Lazy-initialize token balances to $250 worth at current price
+    state.ensure_token_balance(ex_buy, token, buy_price)
+    state.ensure_token_balance(ex_sell, token, sell_price)
+    
     buy_quote_balance = state.balances.get(ex_buy, {}).get("USDT", 250.0)
-    sell_base_balance = state.balances.get(ex_sell, {}).get(token, 250.0 / buy_price)
+    sell_base_balance = state.balances.get(ex_sell, {}).get(token, 0.0)
+    
+    # Safety: Don't trade with negative or near-zero balance
+    if buy_quote_balance < 1.0:
+        logger.warning(f"[{trade_id}] Buy wallet depleted ({ex_buy}: ${buy_quote_balance:.2f}). Skipping.")
+        return
+    if sell_base_balance < 1.0:
+        logger.warning(f"[{trade_id}] Sell wallet depleted ({ex_sell}: {sell_base_balance:.4f} {token}). Skipping.")
+        return
     
     # We want to use 5% of available capital
     trade_capital_usdt = buy_quote_balance * 0.05
@@ -141,17 +152,10 @@ async def execute_simultaneous_arb(
         logger.info(f"[{trade_id}] SPLIT-WALLET ARB SUCCESS! PnL: +{net_pnl:.2f} USDT")
         await update_trade_group_status(trade_id, "completed", net_pnl)
         
-        # Check for 20% Imbalance Trigger
+        # Check for 20% Imbalance Trigger (both USDT and token)
         if mock:
-            buy_usdt = state.balances[ex_buy].get("USDT", 250.0)
-            sell_usdt = state.balances[ex_sell].get("USDT", 250.0)
-            total_usdt = buy_usdt + sell_usdt
-            if total_usdt > 0:
-                imbalance = abs(buy_usdt - sell_usdt) / total_usdt
-                if imbalance >= 0.20:
-                    logger.warning(f"[{trade_id}] 20% IMBALANCE REACHED ({ex_buy}: {buy_usdt:.2f}, {ex_sell}: {sell_usdt:.2f}). Triggering rebalancer!")
-                    from app.execution.rebalancer import trigger_mock_rebalance
-                    asyncio.create_task(trigger_mock_rebalance(token, ex_buy, ex_sell))
+            from app.execution.rebalancer import check_and_rebalance_all
+            asyncio.create_task(check_and_rebalance_all(token, ex_buy, ex_sell))
         
     # Cleanup state
     if trade_id in state.active_trades:

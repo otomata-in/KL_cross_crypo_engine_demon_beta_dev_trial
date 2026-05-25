@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { LiveState, ConnectionStatus, OpportunityRecord, AnalyticsData, TimeseriesData, ConsistencyRow, TradeStateData } from './types';
+import type { LiveState, ConnectionStatus, OpportunityRecord, AnalyticsData, TimeseriesData, ConsistencyRow, TradeStateData, PnLAnalyticsData } from './types';
 
 interface ArbitrageStore {
   // Live data from WebSocket
@@ -42,6 +42,9 @@ interface ArbitrageStore {
   tradeState: TradeStateData | null;
   setTradeState: (data: TradeStateData | null) => void;
 
+  pnlAnalyticsData: PnLAnalyticsData[] | null;
+  setPnlAnalyticsData: (data: PnLAnalyticsData[] | null) => void;
+
   setLiveState: (liveState: LiveState) => void;
   setWsStatus: (wsStatus: ConnectionStatus) => void;
   setThreshold: (threshold: number) => void;
@@ -62,6 +65,7 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
   autoTradeEnabled: false,
   isProMode: false,
   tradeState: null,
+  pnlAnalyticsData: null,
 
   setActiveTab: (activeTab) => set({ activeTab }),
   setOpportunities: (opportunities) => set({ opportunities }),
@@ -75,6 +79,7 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
   setAutoTradeEnabled: (autoTradeEnabled) => set({ autoTradeEnabled }),
   setIsProMode: (isProMode) => set({ isProMode }),
   setTradeState: (tradeState) => set({ tradeState }),
+  setPnlAnalyticsData: (pnlAnalyticsData) => set({ pnlAnalyticsData }),
 
   setLiveState: (liveState) => {
     const state = get();

@@ -261,3 +261,131 @@ async def get_active_rebalances() -> List[dict]:
             d["updated_at"] = d["updated_at"].isoformat()
         result.append(d)
     return result
+
+
+async def get_wallet_deltas() -> List[dict]:
+    """
+    Reconstruct net wallet changes from all filled mock orders.
+    Returns per-exchange USDT and token deltas to apply on top of initial $250.
+    """
+    pool = get_pool()
+    if pool is None:
+        return []
+
+    rows = await pool.fetch("""
+        SELECT exchange, symbol,
+               SUM(CASE WHEN side='buy' THEN -(filled_qty * filled_price) ELSE (filled_qty * filled_price) END) AS usdt_delta,
+               SUM(CASE WHEN side='buy' THEN filled_qty ELSE -filled_qty END) AS token_delta
+        FROM orders
+        WHERE is_mock = true AND status = 'filled'
+        GROUP BY exchange, symbol
+    """)
+    return [dict(r) for r in rows]
+
+
+async def get_rebalance_deltas() -> List[dict]:
+    """
+    Reconstruct net wallet changes from completed rebalance transfers.
+    """
+    pool = get_pool()
+    if pool is None:
+        return []
+
+    rows = await pool.fetch("""
+        SELECT source_ex, dest_ex, asset, SUM(amount) as total_amount
+        FROM rebalance_transfers
+        WHERE is_mock = true AND status = 'completed'
+        GROUP BY source_ex, dest_ex, asset
+    """)
+    return [dict(r) for r in rows]
+
+
+async def update_rebalance_status(transfer_id: str, status: str) -> None:
+    """Update a rebalance transfer's status (e.g. pending -> completed)."""
+    pool = get_pool()
+    if pool is None:
+        return
+    await pool.execute(
+        "UPDATE rebalance_transfers SET status = $2, updated_at = NOW() WHERE transfer_id = $1",
+        transfer_id, status
+    )
+
+
+async def get_recent_rebalances(limit: int = 20) -> List[dict]:
+    """Get recent rebalance transfers for trade ledger display."""
+    pool = get_pool()
+    if pool is None:
+        return []
+
+    rows = await pool.fetch("""
+        SELECT transfer_id, created_at, asset, amount,
+               source_ex, dest_ex, status, is_mock
+        FROM rebalance_transfers
+        ORDER BY created_at DESC
+        LIMIT $1
+    """, limit)
+
+    result = []
+    for row in rows:
+        d = {
+            "trade_id": row["transfer_id"][:12],
+            "trade_time": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+            "ex_buy": row["dest_ex"],
+            "ex_sell": row["source_ex"],
+            "buy_status": row["status"],
+            "sell_status": row["status"],
+            "buy_value": float(row["amount"]),
+            "sell_value": float(row["amount"]),
+            "buy_qty": float(row["amount"]),
+            "sell_qty": float(row["amount"]),
+            "total_fees": 0.0,
+            "net_pnl": 0.0,
+            "token": row["asset"],
+            "is_mock": row["is_mock"],
+            "is_rebalance": True,
+        }
+        result.append(d)
+    return result
+
+async def get_pnl_analytics(timeframe: str, exchange_filter: str, start_time: Optional[datetime] = None) -> List[dict]:
+    """
+    Get aggregated PnL by token, filtered by timeframe and exchange.
+    timeframe: 'session', 'day', 'week', 'month', 'all'
+    exchange_filter: 'all', or specific exchange name (e.g. 'binance')
+    """
+    pool = get_pool()
+    if pool is None:
+        return []
+
+    query = """
+        SELECT token,
+               SUM(realized_pnl) as total_pnl,
+               COUNT(*) as trade_count
+        FROM trade_groups
+        WHERE realized_pnl IS NOT NULL
+          AND status = 'completed'
+    """
+    params = []
+    param_idx = 1
+
+    if timeframe != 'all':
+        if timeframe == 'session' and start_time:
+            query += f" AND created_at >= ${param_idx}"
+            params.append(start_time)
+            param_idx += 1
+        elif timeframe == 'day':
+            query += f" AND created_at >= NOW() - INTERVAL '1 day'"
+        elif timeframe == 'week':
+            query += f" AND created_at >= NOW() - INTERVAL '7 days'"
+        elif timeframe == 'month':
+            query += f" AND created_at >= NOW() - INTERVAL '30 days'"
+
+    if exchange_filter and exchange_filter != 'all':
+        query += f" AND route LIKE ${param_idx}"
+        params.append(f"%{exchange_filter}%")
+        param_idx += 1
+
+    query += " GROUP BY token ORDER BY total_pnl DESC"
+
+    rows = await pool.fetch(query, *params)
+    return [dict(r) for r in rows]

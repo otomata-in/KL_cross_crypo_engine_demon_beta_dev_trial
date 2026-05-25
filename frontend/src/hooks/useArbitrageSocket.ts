@@ -68,11 +68,21 @@ export function useArbitrageSocket() {
             useArbitrageStore.getState().setTradeState(rawData.data);
           } else if (rawData.type === 'kill_switch_activated') {
             useArbitrageStore.getState().setAutoTradeEnabled(false);
+          } else if (rawData.type === 'pnl_analytics_data') {
+            useArbitrageStore.getState().setPnlAnalyticsData(rawData.data);
           } else if (rawData.type === 'logs_reset') {
             useArbitrageStore.getState().setOpportunities([]);
             // Request fresh logs and analytics
             ws.send(JSON.stringify({ type: 'get_recent_opportunities', limit: 100 }));
             ws.send(JSON.stringify({ type: 'get_analytics' }));
+          } else if (rawData.type === 'mock_wallets_reset') {
+            useArbitrageStore.getState().setTradeState({
+              active_trades: [],
+              history: [],
+              rebalances: [],
+              balances: rawData.balances
+            });
+            useArbitrageStore.getState().setAutoTradeEnabled(false);
           } else {
             setLiveState(rawData as LiveState);
             setWsStatus('connected');
