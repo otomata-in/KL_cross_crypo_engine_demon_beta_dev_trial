@@ -269,32 +269,38 @@ export const TradeControlPage: React.FC = () => {
                     </td>
                     <td className="px-6 py-3">
                       <div className="flex flex-col gap-1 text-xs font-mono">
-                        <span className="text-gray-400">Buy: ${t.buy_value?.toFixed(2)}</span>
-                        <span className="text-gray-400">Sell: ${t.sell_value?.toFixed(2)}</span>
+                        <span className="text-gray-400">Buy: ${t.buy_value?.toFixed(3)}</span>
+                        <span className="text-gray-400">Sell: ${t.sell_value?.toFixed(3)}</span>
                       </div>
                     </td>
                     <td className="px-6 py-3">
                       <div className="flex flex-col gap-1 text-[10px] font-mono">
                         <span className="text-gray-400">
-                          <span className="text-red-400">-${t.buy_value?.toFixed(2)} USDT</span> | <span className="text-green-400">+{t.buy_qty?.toFixed(2)} TKN</span> ({t.ex_buy})
+                          <span className="text-red-400">-${t.buy_value?.toFixed(3)} USDT</span> | <span className="text-green-400">+{t.buy_qty?.toFixed(3)} {t.token || 'TKN'}</span> ({t.ex_buy})
                         </span>
                         <span className="text-gray-400">
-                          <span className="text-green-400">+${t.sell_value?.toFixed(2)} USDT</span> | <span className="text-red-400">-{t.sell_qty?.toFixed(2)} TKN</span> ({t.ex_sell})
+                          <span className="text-green-400">+${t.sell_value?.toFixed(3)} USDT</span> | <span className="text-red-400">-{t.sell_qty?.toFixed(3)} {t.token || 'TKN'}</span> ({t.ex_sell})
                         </span>
                       </div>
                     </td>
                     <td className="px-6 py-3 text-right font-mono text-red-400">
-                      -${t.total_fees.toFixed(3)}
+                      -${t.total_fees.toFixed(4)}
                     </td>
                     <td className="px-6 py-3 text-right">
-                      {t.net_pnl > 0 ? (
-                        <span className="text-green-400 font-bold font-mono flex items-center justify-end gap-1">
-                          <CheckCircle className="w-3 h-3" />
-                          +${t.net_pnl.toFixed(3)}
-                        </span>
+                      {(t.net_pnl !== undefined && t.net_pnl !== null) ? (
+                        t.net_pnl > 0 ? (
+                          <span className="text-green-400 font-bold font-mono flex items-center justify-end gap-1">
+                            <CheckCircle className="w-3 h-3" />
+                            +${t.net_pnl.toFixed(4)}
+                          </span>
+                        ) : (
+                          <span className="text-red-400 font-bold font-mono">
+                            ${t.net_pnl.toFixed(4)}
+                          </span>
+                        )
                       ) : (
-                        <span className="text-red-400 font-bold font-mono">
-                          ${t.net_pnl?.toFixed(3) || '0.000'}
+                        <span className="text-gray-500 font-bold font-mono">
+                          $0.0000
                         </span>
                       )}
                     </td>

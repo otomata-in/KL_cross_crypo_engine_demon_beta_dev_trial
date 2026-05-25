@@ -143,23 +143,25 @@ async def get_recent_trades(limit: int = 50) -> List[dict]:
 
     rows = await pool.fetch(
         """
-        SELECT trade_id,
-               MIN(created_at) AS trade_time,
-               MAX(CASE WHEN side = 'buy' THEN exchange END) AS ex_buy,
-               MAX(CASE WHEN side = 'sell' THEN exchange END) AS ex_sell,
-               MAX(CASE WHEN side = 'buy' THEN status END) AS buy_status,
-               MAX(CASE WHEN side = 'sell' THEN status END) AS sell_status,
-               SUM(CASE WHEN side = 'buy' THEN filled_qty * filled_price ELSE 0 END) AS buy_value,
-               SUM(CASE WHEN side = 'sell' THEN filled_qty * filled_price ELSE 0 END) AS sell_value,
-               SUM(CASE WHEN side = 'buy' THEN filled_qty ELSE 0 END) AS buy_qty,
-               SUM(CASE WHEN side = 'sell' THEN filled_qty ELSE 0 END) AS sell_qty,
-               SUM(fee) AS total_fees,
-               MAX(net_pnl) AS net_pnl,
-               BOOL_AND(is_mock) AS is_mock
-        FROM orders
-        WHERE status IN ('filled', 'partial', 'pending', 'open', 'failed')
-          AND trade_id != ''
-        GROUP BY trade_id
+        SELECT o.trade_id,
+               MIN(o.created_at) AS trade_time,
+               MAX(CASE WHEN o.side = 'buy' THEN o.exchange END) AS ex_buy,
+               MAX(CASE WHEN o.side = 'sell' THEN o.exchange END) AS ex_sell,
+               MAX(CASE WHEN o.side = 'buy' THEN o.status END) AS buy_status,
+               MAX(CASE WHEN o.side = 'sell' THEN o.status END) AS sell_status,
+               SUM(CASE WHEN o.side = 'buy' THEN o.filled_qty * o.filled_price ELSE 0 END) AS buy_value,
+               SUM(CASE WHEN o.side = 'sell' THEN o.filled_qty * o.filled_price ELSE 0 END) AS sell_value,
+               SUM(CASE WHEN o.side = 'buy' THEN o.filled_qty ELSE 0 END) AS buy_qty,
+               SUM(CASE WHEN o.side = 'sell' THEN o.filled_qty ELSE 0 END) AS sell_qty,
+               SUM(o.fee) AS total_fees,
+               MAX(tg.realized_pnl) AS net_pnl,
+               MAX(tg.token) AS token,
+               BOOL_AND(o.is_mock) AS is_mock
+        FROM orders o
+        LEFT JOIN trade_groups tg ON o.trade_id = tg.trade_id
+        WHERE o.status IN ('filled', 'partial', 'pending', 'open', 'failed')
+          AND o.trade_id != ''
+        GROUP BY o.trade_id
         ORDER BY trade_time DESC
         LIMIT $1
         """,
