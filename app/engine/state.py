@@ -39,9 +39,13 @@ class LiveState:
 
         # Spread tracking (session highs) — keyed by token
         self.spread_history: Dict[str, dict] = {t: {"max_net": -999.0} for t in self.tokens}
+        
+        # Trading Control
+        self.auto_trade_enabled: bool = False
+        self.is_pro_mode: bool = False
+        self.balances: Dict[str, Dict[str, float]] = {ex: {} for ex in self.enabled_exchanges}
+        self.active_trades: Dict[str, dict] = {}
 
-
-# ── Thread-safe global singleton ─────────────────────────────────
 
 _state = None
 

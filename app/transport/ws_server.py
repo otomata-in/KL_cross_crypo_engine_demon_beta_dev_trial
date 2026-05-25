@@ -103,6 +103,41 @@ class WebSocketServer:
                             "type": "consistency_data",
                             "data": consistency
                         }))
+
+                    elif msg_type == "toggle_autotrader":
+                        self.state.auto_trade_enabled = bool(msg.get("enabled", False))
+                        websockets.broadcast(self.connected_clients, json.dumps({
+                            "type": "autotrader_status",
+                            "enabled": self.state.auto_trade_enabled
+                        }))
+
+                    elif msg_type == "toggle_pro_mode":
+                        self.state.is_pro_mode = bool(msg.get("enabled", False))
+                        websockets.broadcast(self.connected_clients, json.dumps({
+                            "type": "pro_mode_status",
+                            "enabled": self.state.is_pro_mode
+                        }))
+
+                    elif msg_type == "kill_switch":
+                        self.state.auto_trade_enabled = False
+                        self.state.active_trades.clear()
+                        # Real implementation would also cancel open orders on exchanges
+                        websockets.broadcast(self.connected_clients, json.dumps({
+                            "type": "kill_switch_activated"
+                        }))
+                        
+                    elif msg_type == "get_trade_state":
+                        from app.db.order_repo import get_recent_trades, get_active_rebalances
+                        trades = await get_recent_trades(50)
+                        rebalances = await get_active_rebalances()
+                        await websocket.send(json.dumps({
+                            "type": "trade_state_data",
+                            "data": {
+                                "active_trades": list(self.state.active_trades.values()),
+                                "history": trades,
+                                "rebalances": rebalances
+                            }
+                        }))
                         
                     elif msg_type == "reset_logs":
                         await opportunity_repo.reset()

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { LiveState, ConnectionStatus, OpportunityRecord, AnalyticsData, TimeseriesData, ConsistencyRow } from './types';
+import type { LiveState, ConnectionStatus, OpportunityRecord, AnalyticsData, TimeseriesData, ConsistencyRow, TradeStateData } from './types';
 
 interface ArbitrageStore {
   // Live data from WebSocket
@@ -17,8 +17,8 @@ interface ArbitrageStore {
   viewMode: 'cards' | 'heatmap';
   setViewMode: (mode: 'cards' | 'heatmap') => void;
 
-  activeTab: 'dashboard' | 'logs' | 'analytics';
-  setActiveTab: (tab: 'dashboard' | 'logs' | 'analytics') => void;
+  activeTab: 'dashboard' | 'logs' | 'analytics' | 'trade_control';
+  setActiveTab: (tab: 'dashboard' | 'logs' | 'analytics' | 'trade_control') => void;
 
   opportunities: OpportunityRecord[];
   setOpportunities: (opportunities: OpportunityRecord[]) => void;
@@ -32,6 +32,15 @@ interface ArbitrageStore {
 
   consistencyData: ConsistencyRow[] | null;
   setConsistencyData: (data: ConsistencyRow[] | null) => void;
+
+  autoTradeEnabled: boolean;
+  setAutoTradeEnabled: (enabled: boolean) => void;
+  
+  isProMode: boolean;
+  setIsProMode: (enabled: boolean) => void;
+  
+  tradeState: TradeStateData | null;
+  setTradeState: (data: TradeStateData | null) => void;
 
   setLiveState: (liveState: LiveState) => void;
   setWsStatus: (wsStatus: ConnectionStatus) => void;
@@ -50,6 +59,9 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
   analyticsData: null,
   timeseriesData: {},
   consistencyData: null,
+  autoTradeEnabled: false,
+  isProMode: false,
+  tradeState: null,
 
   setActiveTab: (activeTab) => set({ activeTab }),
   setOpportunities: (opportunities) => set({ opportunities }),
@@ -60,6 +72,9 @@ export const useArbitrageStore = create<ArbitrageStore>((set, get) => ({
     timeseriesData: { ...state.timeseriesData, [token]: data } 
   })),
   setConsistencyData: (consistencyData) => set({ consistencyData }),
+  setAutoTradeEnabled: (autoTradeEnabled) => set({ autoTradeEnabled }),
+  setIsProMode: (isProMode) => set({ isProMode }),
+  setTradeState: (tradeState) => set({ tradeState }),
 
   setLiveState: (liveState) => {
     const state = get();

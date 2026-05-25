@@ -60,6 +60,14 @@ export function useArbitrageSocket() {
             useArbitrageStore.getState().setTimeseriesData(rawData.data.token, rawData.data);
           } else if (rawData.type === 'consistency_data') {
             useArbitrageStore.getState().setConsistencyData(rawData.data);
+          } else if (rawData.type === 'autotrader_status') {
+            useArbitrageStore.getState().setAutoTradeEnabled(rawData.enabled);
+          } else if (rawData.type === 'pro_mode_status') {
+            useArbitrageStore.getState().setIsProMode(rawData.enabled);
+          } else if (rawData.type === 'trade_state_data') {
+            useArbitrageStore.getState().setTradeState(rawData.data);
+          } else if (rawData.type === 'kill_switch_activated') {
+            useArbitrageStore.getState().setAutoTradeEnabled(false);
           } else if (rawData.type === 'logs_reset') {
             useArbitrageStore.getState().setOpportunities([]);
             // Request fresh logs and analytics

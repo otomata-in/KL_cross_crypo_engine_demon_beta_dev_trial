@@ -111,6 +111,55 @@ class Order:
         )
 
 
+@dataclass
+class TradeGroup:
+    """
+    Links two simultaneous arbitrage orders (Leg 1 and Leg 2).
+    """
+    trade_id:      str
+    token:         str
+    route:         str
+    target_spread: float
+    status:        str = "executing"
+    realized_pnl:  Optional[float] = None
+    is_mock:       bool = True
+    created_at:    Optional[str] = None
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now(timezone.utc).isoformat()
+            
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class RebalanceTransfer:
+    """
+    Tracks an on-chain Solana transfer to rebalance inventory skew.
+    """
+    transfer_id: str
+    asset:       str
+    amount:      float
+    source_ex:   str
+    dest_ex:     str
+    status:      str = "pending"
+    tx_hash:     Optional[str] = None
+    is_mock:     bool = True
+    created_at:  Optional[str] = None
+    updated_at:  Optional[str] = None
+
+    def __post_init__(self):
+        now = datetime.now(timezone.utc).isoformat()
+        if self.created_at is None:
+            self.created_at = now
+        if self.updated_at is None:
+            self.updated_at = now
+            
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 # ── DB SQL ───────────────────────────────────────────────────────
 
 ORDER_INSERT_SQL = """

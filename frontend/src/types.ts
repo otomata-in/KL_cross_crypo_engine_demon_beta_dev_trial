@@ -130,4 +130,34 @@ export interface ConsistencyRow {
   observations: number;
 }
 
+export interface TradeGroup {
+  trade_id: string;
+  token: string;
+  route: string;
+  target_spread: number;
+  status: string;
+  realized_pnl: number | null;
+  is_mock: boolean;
+  created_at: string;
+}
+
+export interface RebalanceTransfer {
+  transfer_id: string;
+  asset: string;
+  amount: number;
+  source_ex: string;
+  dest_ex: string;
+  status: string;
+  tx_hash: string | null;
+  is_mock: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TradeStateData {
+  active_trades: TradeGroup[];
+  history: any[]; // Using any for simplicity right now
+  rebalances: RebalanceTransfer[];
+}
+
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';

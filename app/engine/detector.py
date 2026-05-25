@@ -162,6 +162,22 @@ class OpportunityDetector:
             await opportunity_repo.insert(record_dict)
         except Exception as e:
             print(f"[detector] DB write error: {e}")
+            
+        # Execute Auto-Trade
+        if self.state.auto_trade_enabled:
+            from app.execution.split_wallet import execute_simultaneous_arb
+            # Fire the async task without awaiting so it doesn't block detector loop
+            asyncio.create_task(
+                execute_simultaneous_arb(
+                    token=token,
+                    ex_buy=buy_ex,
+                    ex_sell=sell_ex,
+                    target_spread=net_spread,
+                    buy_price=buy_ask,
+                    sell_price=sell_bid,
+                    mock=self.state.is_pro_mode is False
+                )
+            )
 
         # Broadcast
         if self.broadcast_callback:

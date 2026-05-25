@@ -161,3 +161,80 @@ async def get_recent_trades(limit: int = 50) -> List[dict]:
     )
 
     return [dict(row) for row in rows]
+
+
+async def insert_trade_group(trade_dict: dict) -> None:
+    pool = get_pool()
+    if pool is None:
+        return
+        
+    ts = trade_dict.get("created_at")
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    elif ts is None:
+        ts = datetime.now(timezone.utc)
+
+    await pool.execute(
+        """
+        INSERT INTO trade_groups (
+            trade_id, created_at, token, route, target_spread,
+            status, realized_pnl, is_mock
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+        trade_dict["trade_id"],
+        ts,
+        trade_dict["token"],
+        trade_dict["route"],
+        float(trade_dict["target_spread"]),
+        trade_dict.get("status", "executing"),
+        float(trade_dict["realized_pnl"]) if trade_dict.get("realized_pnl") is not None else None,
+        trade_dict.get("is_mock", True),
+    )
+
+
+async def update_trade_group_status(trade_id: str, status: str, realized_pnl: Optional[float] = None) -> None:
+    pool = get_pool()
+    if pool is None:
+        return
+    await pool.execute(
+        "UPDATE trade_groups SET status = $2, realized_pnl = $3 WHERE trade_id = $1",
+        trade_id, status, realized_pnl
+    )
+
+
+async def insert_rebalance_transfer(transfer_dict: dict) -> None:
+    pool = get_pool()
+    if pool is None:
+        return
+
+    ts = transfer_dict.get("created_at")
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    elif ts is None:
+        ts = datetime.now(timezone.utc)
+
+    await pool.execute(
+        """
+        INSERT INTO rebalance_transfers (
+            transfer_id, created_at, updated_at, asset, amount,
+            source_ex, dest_ex, status, tx_hash, is_mock
+        ) VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9)
+        """,
+        transfer_dict["transfer_id"],
+        ts,
+        transfer_dict["asset"],
+        float(transfer_dict["amount"]),
+        transfer_dict["source_ex"],
+        transfer_dict["dest_ex"],
+        transfer_dict.get("status", "pending"),
+        transfer_dict.get("tx_hash"),
+        transfer_dict.get("is_mock", True),
+    )
+
+
+async def get_active_rebalances() -> List[dict]:
+    pool = get_pool()
+    if pool is None:
+        return []
+    rows = await pool.fetch("SELECT * FROM rebalance_transfers WHERE status = 'pending' ORDER BY created_at DESC")
+    return [dict(row) for row in rows]

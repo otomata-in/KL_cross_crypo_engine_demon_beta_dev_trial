@@ -79,3 +79,41 @@ CREATE INDEX IF NOT EXISTS idx_order_trade_id
 -- Index: open orders
 CREATE INDEX IF NOT EXISTS idx_order_status
     ON orders (status, created_at DESC);
+
+-- ============================================================
+-- Trade Groups Table — Linking Simultaneous Arbitrage Legs
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS trade_groups (
+    trade_id      VARCHAR(20)       PRIMARY KEY,
+    created_at    TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+    token         VARCHAR(10)       NOT NULL,
+    route         VARCHAR(30)       NOT NULL,
+    target_spread DOUBLE PRECISION  NOT NULL,
+    status        VARCHAR(20)       NOT NULL DEFAULT 'executing',
+    realized_pnl  DOUBLE PRECISION,
+    is_mock       BOOLEAN           NOT NULL DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_group_status
+    ON trade_groups (status, created_at DESC);
+
+-- ============================================================
+-- Rebalance Transfers Table — Tracking Solana Inventory Moves
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS rebalance_transfers (
+    transfer_id   VARCHAR(40)       PRIMARY KEY,
+    created_at    TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ,
+    asset         VARCHAR(10)       NOT NULL,
+    amount        DOUBLE PRECISION  NOT NULL,
+    source_ex     VARCHAR(12)       NOT NULL,
+    dest_ex       VARCHAR(12)       NOT NULL,
+    status        VARCHAR(20)       NOT NULL DEFAULT 'pending',
+    tx_hash       TEXT,
+    is_mock       BOOLEAN           NOT NULL DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_rebalance_status
+    ON rebalance_transfers (status, created_at DESC);

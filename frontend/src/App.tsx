@@ -8,6 +8,7 @@ import { WaitingScreen } from './components/WaitingScreen';
 import { OpportunitiesPage } from './components/OpportunitiesPage';
 
 import { AnalyticsPage } from './components/AnalyticsPage';
+import { TradeControlPage } from './components/TradeControlPage';
 
 function App() {
   // Establish WebSocket connection on mount
@@ -39,6 +40,8 @@ function App() {
             <OpportunitiesPage />
           ) : activeTab === 'analytics' ? (
             <AnalyticsPage />
+          ) : activeTab === 'trade_control' ? (
+            <TradeControlPage />
           ) : viewMode === 'cards' ? (
             <TokenGrid />
           ) : (

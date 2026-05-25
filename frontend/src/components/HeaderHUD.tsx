@@ -125,6 +125,12 @@ export const HeaderHUD: React.FC = () => {
             >
               Analytics
             </button>
+            <button
+              onClick={() => useArbitrageStore.getState().setActiveTab('trade_control')}
+              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${activeTab === 'trade_control' ? 'bg-accent/20 text-accent-light' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              Trade Control
+            </button>
           </div>
 
           {/* View Mode Toggle (only show on dashboard) */}
