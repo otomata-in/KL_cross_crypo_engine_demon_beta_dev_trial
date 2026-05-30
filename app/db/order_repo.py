@@ -7,9 +7,12 @@ Tracks order lifecycle for arbitrage trade execution.
 
 from datetime import datetime, timezone
 from typing import List, Optional
+import structlog
 
 from app.db.pool import get_pool
 from app.models.order import ORDER_INSERT_SQL, ORDER_UPDATE_STATUS_SQL, OrderStatus
+
+logger = structlog.get_logger("db_cleanup")
 
 
 async def insert_order(order_dict: dict) -> None:
@@ -389,3 +392,27 @@ async def get_pnl_analytics(timeframe: str, exchange_filter: str, start_time: Op
 
     rows = await pool.fetch(query, *params)
     return [dict(r) for r in rows]
+
+async def cleanup_old_orders(days: int = 30) -> None:
+    """Delete mock trades and rebalances older than X days to save disk space."""
+    pool = get_pool()
+    if pool is None:
+        return
+    
+    try:
+        from datetime import timedelta
+        deleted_orders = await pool.execute(
+            "DELETE FROM orders WHERE created_at < NOW() - $1::interval",
+            timedelta(days=days)
+        )
+        deleted_groups = await pool.execute(
+            "DELETE FROM trade_groups WHERE created_at < NOW() - $1::interval",
+            timedelta(days=days)
+        )
+        deleted_rebalances = await pool.execute(
+            "DELETE FROM rebalance_transfers WHERE created_at < NOW() - $1::interval",
+            timedelta(days=days)
+        )
+        logger.info(f"[db] Cleaned up old mock data: {deleted_orders} orders, {deleted_groups} groups, {deleted_rebalances} rebalances")
+    except Exception as e:
+        logger.error(f"[db] Failed to clean up old mock data: {e}")

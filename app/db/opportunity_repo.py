@@ -11,6 +11,9 @@ from typing import List, Optional
 
 from app.db.pool import get_pool
 from app.models.opportunity import OPPORTUNITY_INSERT_SQL
+import structlog
+
+logger = structlog.get_logger("db_cleanup")
 
 
 async def insert(record: dict) -> None:
@@ -173,6 +176,22 @@ async def reset() -> None:
         return
     await pool.execute("TRUNCATE TABLE opportunities")
     print("[db] Opportunities table truncated")
+
+
+async def cleanup_old_data(days: int = 7) -> None:
+    """Delete opportunities older than X days to save disk space."""
+    pool = get_pool()
+    if pool is None:
+        return
+    
+    try:
+        deleted = await pool.execute(
+            "DELETE FROM opportunities WHERE timestamp_utc < NOW() - $1::interval",
+            timedelta(days=days)
+        )
+        logger.info(f"[db] Cleaned up old opportunities: {deleted}")
+    except Exception as e:
+        logger.error(f"[db] Failed to clean up old opportunities: {e}")
 
 
 async def get_timeseries_data(token: str, interval: str = "5 minutes", limit: int = 100) -> List[dict]:

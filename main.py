@@ -12,6 +12,8 @@ from app.config import get_config
 from app.db import init_db, close_db
 from app.engine.state import get_state
 from app.engine.detector import OpportunityDetector
+from app.db.opportunity_repo import cleanup_old_data
+from app.db.order_repo import cleanup_old_orders
 from app.exchanges.registry import ExchangeRegistry
 from app.transport.ws_server import WebSocketServer
 from app.lib.logger import setup_logging
@@ -71,6 +73,9 @@ async def main(threshold: float, port: int):
     # Opportunity Detector Loop
     tasks.append(asyncio.create_task(detector.run()))
 
+    # DB Cleanup Loop (runs once a day)
+    tasks.append(asyncio.create_task(_db_cleanup_loop()))
+
     # Orderbook feed loops for each plugin
     for name, plugin in registry.plugins.items():
         if hasattr(plugin, "watch_orderbook"):
@@ -108,12 +113,28 @@ async def _watch_feed(plugin, token: str, symbol: str):
                 state.exchanges[plugin.name][token] = ob
                 state.ws_status[plugin.name][token] = "connected"
                 state.update_count[plugin.name] += 1
-            else:
-                state.ws_status[plugin.name][token] = "error:no_data"
+        except asyncio.CancelledError:
+            break
         except Exception as e:
-            err_msg = str(e)[:30]
-            state.ws_status[plugin.name][token] = f"error:{err_msg}"
-            await asyncio.sleep(2)
+            state.ws_status[plugin.name][token] = "error"
+            await asyncio.sleep(5)
+
+async def _db_cleanup_loop():
+    """Periodically cleans up old DB data to prevent disk exhaustion."""
+    while True:
+        try:
+            print("[main] Running periodic DB cleanup...")
+            await cleanup_old_data(days=7)
+            await cleanup_old_orders(days=30)
+            print("[main] DB cleanup complete. Sleeping for 24 hours.")
+        except Exception as e:
+            print(f"[main] DB cleanup failed: {e}")
+        
+        # Sleep for 24 hours
+        try:
+            await asyncio.sleep(86400)
+        except asyncio.CancelledError:
+            break
 
 
 async def _watch_peg(binance_plugin):
